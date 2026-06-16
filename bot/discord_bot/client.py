@@ -39,6 +39,18 @@ class NewsTradingBot(commands.Bot):
         self._alert_channel: discord.TextChannel | None = None
         self._processed_messages: set[str] = set()
 
+    def _is_news_author(self, message: discord.Message) -> bool:
+        """Allow human posts and trusted news bots (e.g. NuntioBot) in news channels."""
+        if self.user and message.author.id == self.user.id:
+            return False
+        if not message.author.bot:
+            return True
+        if message.channel.id not in self.settings.news.source_channel_ids:
+            return False
+        trusted = self.settings.news.trusted_news_bots or ["nuntio"]
+        name = message.author.name.lower()
+        return any(token.lower() in name for token in trusted)
+
     async def on_app_command_completion(
         self,
         interaction: discord.Interaction,
@@ -77,7 +89,7 @@ class NewsTradingBot(commands.Bot):
         logger.info("Logged in as %s", self.user)
 
     async def on_message(self, message: discord.Message) -> None:
-        if message.author.bot:
+        if not self._is_news_author(message):
             return
 
         is_dm = message.guild is None
@@ -92,24 +104,22 @@ class NewsTradingBot(commands.Bot):
         if str(message.id) in self._processed_messages:
             return
 
-        urls = self._extract_urls_from_message(message)
         source = (
             f"DM from {message.author.display_name}"
             if is_dm
             else f"{message.guild.name} / #{message.channel.name}"
         )
 
-        if urls:
-            await self._handle_news_urls(
-                urls,
-                source=source,
-                message_id=str(message.id),
-                message=message,
-            )
-            return
+        author_tag = message.author.name
+        if message.author.bot:
+            author_tag = f"{message.author.name} (bot)"
+        logger.info("News message received from %s in channel %s", author_tag, message.channel.id)
 
-        if in_news:
-            await self._handle_news_message(message)
+        processed = await self._process_news_message(message, source=source)
+        if processed:
+            self._processed_messages.add(str(message.id))
+        if len(self._processed_messages) > 2000:
+            self._processed_messages = set(list(self._processed_messages)[-1000:])
 
     def _collect_message_text(self, message: discord.Message) -> str:
         parts = [message.content]
@@ -167,37 +177,88 @@ class NewsTradingBot(commands.Bot):
 
         return trade_msg
 
-    async def _handle_news_urls(
-        self,
-        urls: list[str],
-        source: str,
-        message_id: str,
-        *,
-        message: discord.Message | None = None,
-    ) -> None:
-        for url in urls:
-            dedupe_key = f"url:{url}"
+    async def _process_news_message(self, message: discord.Message, *, source: str) -> int:
+        """Process every ticker block in a message (URL fetch + Discord text)."""
+        text = self._collect_message_text(message)
+        if not text.strip():
+            logger.warning("Skip message %s — empty content", message.id)
+            return 0
+
+        published = message.created_at.strftime("%Y-%m-%d %H:%M UTC")
+        blocks = split_news_blocks(text)
+        message_urls = self._extract_allowed_urls(text)
+        processed = 0
+
+        for block in blocks:
+            block = block.strip()
+            if not block:
+                continue
+
+            symbol = extract_stock_symbol(block)
+            sym_key = symbol or "?"
+            dedupe_key = f"{message.id}:{sym_key}"
             if dedupe_key in self._processed_messages:
                 continue
 
-            mark_news_if_absent(url)
-            item = await self._url_to_item(
-                url,
-                source=source,
-                message_id=dedupe_key,
-                message=message,
-            )
-            if not item and message:
-                await self._handle_news_blocks(message, source=source, skip_url=url)
-                self._processed_messages.add(dedupe_key)
-                continue
+            block_urls = self._extract_allowed_urls(block)
+            url = block_urls[0] if block_urls else None
+            if not url and len(blocks) == 1 and message_urls:
+                url = message_urls[0]
+
+            item: NewsItem | None = None
+            if url and f"url:{url}" not in self._processed_messages:
+                item = await self._url_to_item(
+                    url,
+                    source=source,
+                    message_id=dedupe_key,
+                    message=message,
+                )
+                if item:
+                    self._processed_messages.add(f"url:{url}")
+                    if symbol:
+                        item.stock_symbol = symbol
+                    elif not item.stock_symbol:
+                        item.stock_symbol = extract_stock_symbol(block)
+
+            if not item:
+                item = self.analyzer.analyze_text(
+                    block,
+                    source=source,
+                    published=published,
+                    message_id=str(message.id),
+                    jump_url=message.jump_url,
+                )
+                if item:
+                    if symbol:
+                        item.stock_symbol = symbol
+                    if url:
+                        item.link = url
 
             if not item:
                 continue
 
             self._processed_messages.add(dedupe_key)
-            trade_msg = await self._process_item(item, timing_key=url)
+            timing_key = url or dedupe_key
+            mark_news_if_absent(timing_key)
+            mark_step(timing_key, "received")
+            trade_msg = await self._process_item(item, timing_key=timing_key)
             await self.send_news_alert(item, trade_msg)
+            processed += 1
+            logger.info(
+                "Processed message %s — %s %s (%s)",
+                message.id,
+                item.stock_symbol or "?",
+                item.sentiment,
+                item.matched_keyword,
+            )
+
+        if not processed and text.strip():
+            logger.warning(
+                "No alert created for message %s — check content/symbol format",
+                message.id,
+            )
+
+        return processed
 
     async def _url_to_item(
         self,
@@ -239,36 +300,6 @@ class NewsTradingBot(commands.Bot):
             source=f"/news by {user.display_name}",
             message_id=f"cmd:{url}",
         )
-
-    async def _handle_news_message(self, message: discord.Message) -> None:
-        source = f"{message.guild.name} / #{message.channel.name}" if message.guild else "DM"
-        await self._handle_news_blocks(message, source=source)
-        self._processed_messages.add(str(message.id))
-        if len(self._processed_messages) > 1000:
-            self._processed_messages = set(list(self._processed_messages)[-500:])
-
-    async def _handle_news_blocks(
-        self,
-        message: discord.Message,
-        *,
-        source: str,
-        skip_url: str = "",
-    ) -> int:
-        processed = 0
-        for item in self._message_to_items(message, source=source):
-            if skip_url and item.link == skip_url:
-                continue
-
-            sym = item.stock_symbol or "?"
-            dedupe_key = f"{message.id}:{sym}"
-            if dedupe_key in self._processed_messages:
-                continue
-
-            self._processed_messages.add(dedupe_key)
-            trade_msg = await self._process_item(item, timing_key=item.link or dedupe_key)
-            await self.send_news_alert(item, trade_msg)
-            processed += 1
-        return processed
 
     def _message_to_items(self, message: discord.Message, *, source: str) -> list[NewsItem]:
         text = self._collect_message_text(message)
@@ -403,31 +434,20 @@ class BotCommands(commands.Cog):
                 continue
 
             async for message in channel.history(limit=30):
-                if message.author.bot:
+                if not self.bot._is_news_author(message):
                     continue
                 if str(message.id) in self.bot._processed_messages:
                     continue
 
-                items = self.bot._message_to_items(
-                    message,
-                    source=f"{message.guild.name} / #{message.channel.name}" if message.guild else "scan",
+                source = (
+                    f"{message.guild.name} / #{message.channel.name}"
+                    if message.guild
+                    else "scan"
                 )
-                if not items:
-                    continue
-
-                for block_item in items:
-                    sym = block_item.stock_symbol or "?"
-                    dedupe_key = f"{message.id}:{sym}"
-                    if dedupe_key in self.bot._processed_messages:
-                        continue
-
-                    self.bot._processed_messages.add(dedupe_key)
-                    trade_msg = await self.bot._process_item(
-                        block_item,
-                        timing_key=block_item.link or dedupe_key,
-                    )
-                    await self.bot.send_news_alert(block_item, trade_msg)
-                    found += 1
+                count = await self.bot._process_news_message(message, source=source)
+                if count:
+                    self.bot._processed_messages.add(str(message.id))
+                    found += count
 
         if found == 0:
             await interaction.followup.send("No new matching messages found.")

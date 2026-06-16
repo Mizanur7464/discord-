@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import threading
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from bot.news.symbols import extract_stock_symbol
 from bot.news.url_fetcher import extract_urls, is_allowed_url
@@ -102,6 +102,23 @@ class SessionForwarder:
         except Exception as exc:
             logger.error("Forwarder gateway stopped: %s", exc)
 
+    def _fetch_full_message(self, bot, channel_id: int, message_id: str) -> dict[str, Any] | None:
+        """Discord gateway CREATE payloads often have incomplete embeds — fetch full message."""
+        try:
+            resp = bot.getMessage(channel_id, message_id)
+            data = resp.json() if hasattr(resp, "json") else resp
+            if isinstance(data, dict) and data.get("id"):
+                return data
+        except Exception as exc:
+            logger.warning("Forwarder full fetch failed for %s: %s", message_id, exc)
+        return None
+
+    def _signal_from_text(self, text: str) -> tuple[list[str], str]:
+        domains = self.settings.news.allowed_url_domains
+        urls = [u for u in extract_urls(text) if is_allowed_url(u, domains)]
+        symbol = extract_stock_symbol(text)
+        return urls, symbol
+
     def _handle_message(self, bot, data: dict) -> None:
         channel_id = int(data.get("channel_id", 0))
         if channel_id not in self.settings.forwarder.source_channel_ids:
@@ -112,19 +129,25 @@ class SessionForwarder:
             return
 
         text = self._build_text(data)
+        urls, symbol = self._signal_from_text(text)
+
+        if not urls and not symbol and data.get("embeds"):
+            full = self._fetch_full_message(bot, channel_id, message_id)
+            if full:
+                data = full
+                text = self._build_text(data)
+                urls, symbol = self._signal_from_text(text)
+
         if not text:
+            logger.info("Forwarder skip %s — empty message body", message_id)
             return
 
-        domains = self.settings.news.allowed_url_domains
-        urls = [u for u in extract_urls(text) if is_allowed_url(u, domains)]
-        symbol = extract_stock_symbol(text)
-
         if self.settings.forwarder.require_news_url and not urls and not symbol:
-            logger.debug("Forwarder skip %s — no news URL or ticker", message_id)
+            logger.info("Forwarder skip %s — no news URL or ticker", message_id)
             return
 
         if not urls and not symbol:
-            logger.debug("Forwarder skip %s — empty signal", message_id)
+            logger.info("Forwarder skip %s — no URL or ticker in: %s", message_id, text[:80])
             return
 
         mark_news(urls[0] if urls else message_id)

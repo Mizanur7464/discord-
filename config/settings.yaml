@@ -13,6 +13,8 @@ news:
   always_process_urls: false
   check_negation: true
   headline_only_bullish: true   # bullish keywords match headline only (not company intro)
+  trusted_news_bots:           # bot usernames allowed to post in news channel (substring match)
+    - nuntio
 
   negation_words:
     - not

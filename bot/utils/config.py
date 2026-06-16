@@ -23,6 +23,7 @@ class NewsConfig:
     always_process_urls: bool = True
     alert_all_news: bool = True
     headline_only_bullish: bool = True
+    trusted_news_bots: list[str] | None = None
     check_negation: bool = True
     negation_words: list[str] | None = None
 
@@ -136,6 +137,7 @@ def load_settings() -> Settings:
             always_process_urls=news_raw.get("always_process_urls", True),
             alert_all_news=news_raw.get("alert_all_news", True),
             headline_only_bullish=news_raw.get("headline_only_bullish", True),
+            trusted_news_bots=news_raw.get("trusted_news_bots", ["nuntio"]),
             check_negation=news_raw.get("check_negation", True),
             negation_words=news_raw.get("negation_words"),
         ),

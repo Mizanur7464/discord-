@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import math
@@ -220,7 +221,7 @@ class TradingEngine:
             )
 
         try:
-            count = self._cancel_open_orders(stock)
+            count = await asyncio.to_thread(self._cancel_open_orders, stock)
             msg = f"Bad news on {stock} — cancelled {count} open order(s)."
             if count == 0:
                 msg = f"Bad news on {stock} — no open orders to cancel."
@@ -270,6 +271,9 @@ class TradingEngine:
         if sentiment != "bullish":
             return None
 
+        return await asyncio.to_thread(self._execute_sync, symbol, text)
+
+    def _execute_sync(self, symbol: str, text: str) -> TradeResult | None:
         self._reset_daily_count()
 
         block = self._is_trading_allowed()
