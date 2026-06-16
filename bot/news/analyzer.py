@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
 
+from bot.news.ai_sentiment import AISentimentError, classify_headline
 from bot.news.symbols import NUNTIO_FIRST_LINE, extract_stock_symbol
 from bot.utils.config import NewsConfig
+from bot.utils.timing import mark_step
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_NEGATION_WORDS = [
     "not",
@@ -175,6 +180,96 @@ class MessageAnalyzer:
 
         return "neutral", ""
 
+    async def detect_sentiment_async(
+        self,
+        text: str,
+        *,
+        headline: str = "",
+        symbol: str = "",
+        timing_key: str = "",
+    ) -> tuple[str, str]:
+        """Keyword rules first, then OpenAI when still neutral."""
+        sentiment, keyword = self.detect_sentiment(text, headline=headline)
+        if sentiment != "neutral":
+            return sentiment, keyword
+
+        if not self.config.ai_sentiment_enabled or not self.config.openai_api_key:
+            return "neutral", keyword
+
+        if self.config.ai_on_neutral_only is False:
+            pass  # future: always run AI
+
+        head = headline or self.extract_headline(text)
+        if not head.strip():
+            return "neutral", keyword
+
+        if timing_key:
+            mark_step(timing_key, "ai")
+        try:
+            ai_sentiment, reason = await classify_headline(
+                head,
+                api_key=self.config.openai_api_key,
+                model=self.config.openai_model,
+                symbol=symbol,
+            )
+            if ai_sentiment == "neutral":
+                return "neutral", keyword or "none"
+            return ai_sentiment, f"ai: {reason}"
+        except (AISentimentError, Exception) as exc:
+            logger.warning("AI sentiment failed: %s", exc)
+            return "neutral", keyword or "none"
+
+    async def analyze_text_async(
+        self,
+        text: str,
+        *,
+        source: str,
+        published: str,
+        message_id: str,
+        jump_url: str = "",
+        from_url: bool = False,
+        headline: str = "",
+        timing_key: str = "",
+    ) -> NewsItem | None:
+        """Convert message text into a news item (with optional AI fallback)."""
+        if not text.strip():
+            return None
+
+        head = headline or self.extract_headline(text)
+        symbol = extract_stock_symbol(text)
+        sentiment, keyword = await self.detect_sentiment_async(
+            text,
+            headline=head,
+            symbol=symbol,
+            timing_key=timing_key,
+        )
+
+        if sentiment == "neutral":
+            if not self.config.alert_all_news:
+                if from_url:
+                    return None
+                if self.config.process_all_messages:
+                    sentiment = "bullish"
+                    keyword = "new message"
+                else:
+                    return None
+            keyword = keyword or "none"
+
+        preview = head if head else text.strip()
+        if len(preview) > 300:
+            preview = preview[:297] + "..."
+
+        return NewsItem(
+            title=preview,
+            link=jump_url,
+            source=source,
+            published=published,
+            sentiment=sentiment,
+            matched_keyword=keyword,
+            message_id=message_id,
+            stock_symbol=symbol,
+        )
+
     def analyze_text(
         self,
         text: str,
@@ -218,6 +313,35 @@ class MessageAnalyzer:
             message_id=message_id,
             stock_symbol=extract_stock_symbol(text),
         )
+
+    async def analyze_article_async(
+        self,
+        title: str,
+        body: str,
+        *,
+        url: str,
+        source: str,
+        message_id: str,
+        timing_key: str = "",
+    ) -> NewsItem | None:
+        """Analyze fetched article with AI fallback on neutral."""
+        headline = title.strip() or self.extract_headline(body)
+        text = f"{headline}\n{body}" if body else headline
+        item = await self.analyze_text_async(
+            text,
+            source=source,
+            published="from URL",
+            message_id=message_id,
+            jump_url=url,
+            from_url=True,
+            headline=headline,
+            timing_key=timing_key or url,
+        )
+        if item:
+            item.title = headline[:300]
+            if not item.stock_symbol:
+                item.stock_symbol = extract_stock_symbol(text)
+        return item
 
     def analyze_article(
         self,

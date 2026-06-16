@@ -24,6 +24,10 @@ class NewsConfig:
     alert_all_news: bool = True
     headline_only_bullish: bool = True
     trusted_news_bots: list[str] | None = None
+    ai_sentiment_enabled: bool = True
+    ai_on_neutral_only: bool = True
+    openai_model: str = "gpt-4o-mini"
+    openai_api_key: str = ""
     check_negation: bool = True
     negation_words: list[str] | None = None
 
@@ -138,6 +142,10 @@ def load_settings() -> Settings:
             alert_all_news=news_raw.get("alert_all_news", True),
             headline_only_bullish=news_raw.get("headline_only_bullish", True),
             trusted_news_bots=news_raw.get("trusted_news_bots", ["nuntio"]),
+            ai_sentiment_enabled=news_raw.get("ai_sentiment_enabled", True),
+            ai_on_neutral_only=news_raw.get("ai_on_neutral_only", True),
+            openai_model=news_raw.get("openai_model", "gpt-4o-mini"),
+            openai_api_key=os.getenv("OPENAI_API_KEY", "").strip(),
             check_negation=news_raw.get("check_negation", True),
             negation_words=news_raw.get("negation_words"),
         ),

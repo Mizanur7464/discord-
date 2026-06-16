@@ -15,6 +15,9 @@ news:
   headline_only_bullish: true   # bullish keywords match headline only (not company intro)
   trusted_news_bots:           # bot usernames allowed to post in news channel (substring match)
     - nuntio
+  ai_sentiment_enabled: true    # use OpenAI when keywords return neutral
+  ai_on_neutral_only: true      # keep keyword rules first; AI fills gaps
+  openai_model: gpt-4o-mini     # fast model for headline classification
 
   negation_words:
     - not
@@ -58,6 +61,8 @@ news:
       - ai partnership
       - ai collaboration
       - ai contract
+      - patent
+      - granted
       - blockchain
       - ev
     ignore:

@@ -212,6 +212,7 @@ class NewsTradingBot(commands.Bot):
                     source=source,
                     message_id=dedupe_key,
                     message=message,
+                    timing_key=url or dedupe_key,
                 )
                 if item:
                     self._processed_messages.add(f"url:{url}")
@@ -221,12 +222,14 @@ class NewsTradingBot(commands.Bot):
                         item.stock_symbol = extract_stock_symbol(block)
 
             if not item:
-                item = self.analyzer.analyze_text(
+                timing_key = url or dedupe_key
+                item = await self.analyzer.analyze_text_async(
                     block,
                     source=source,
                     published=published,
                     message_id=str(message.id),
                     jump_url=message.jump_url,
+                    timing_key=timing_key,
                 )
                 if item:
                     if symbol:
@@ -267,15 +270,18 @@ class NewsTradingBot(commands.Bot):
         message_id: str,
         *,
         message: discord.Message | None = None,
+        timing_key: str = "",
     ) -> NewsItem | None:
+        key = timing_key or url
         try:
             title, body = await fetch_article(url)
-            mark_step(url, "fetch")
+            mark_step(key, "fetch")
         except UrlFetchError as exc:
             logger.warning("URL fetch failed for %s: %s — trying Discord message fallback", url, exc)
             if message:
                 source = source or "news URL"
-                for item in self._message_to_items(message, source=source):
+                items = await self._message_to_items_async(message, source=source, timing_key=key)
+                for item in items:
                     symbol = item.stock_symbol or extract_stock_symbol(item.title)
                     if symbol:
                         item.stock_symbol = symbol
@@ -284,12 +290,13 @@ class NewsTradingBot(commands.Bot):
             return None
 
         preview = title if title else body[:300]
-        return self.analyzer.analyze_article(
+        return await self.analyzer.analyze_article_async(
             preview,
             body,
             url=url,
             source=source,
             message_id=message_id,
+            timing_key=key,
         )
 
     async def process_news_url(self, url: str, user: discord.User | discord.Member) -> NewsItem | None:
@@ -300,6 +307,34 @@ class NewsTradingBot(commands.Bot):
             source=f"/news by {user.display_name}",
             message_id=f"cmd:{url}",
         )
+
+    async def _message_to_items_async(
+        self,
+        message: discord.Message,
+        *,
+        source: str,
+        timing_key: str = "",
+    ) -> list[NewsItem]:
+        text = self._collect_message_text(message)
+        published = message.created_at.strftime("%Y-%m-%d %H:%M UTC")
+        items: list[NewsItem] = []
+
+        for block in split_news_blocks(text):
+            item = await self.analyzer.analyze_text_async(
+                block,
+                source=source,
+                published=published,
+                message_id=str(message.id),
+                jump_url=message.jump_url,
+                timing_key=timing_key,
+            )
+            if not item:
+                continue
+            symbol = extract_stock_symbol(block)
+            if symbol:
+                item.stock_symbol = symbol
+            items.append(item)
+        return items
 
     def _message_to_items(self, message: discord.Message, *, source: str) -> list[NewsItem]:
         text = self._collect_message_text(message)
@@ -352,6 +387,8 @@ class NewsTradingBot(commands.Bot):
         )
         embed.add_field(name="Source", value=item.source, inline=True)
         embed.add_field(name="Keyword", value=item.matched_keyword, inline=True)
+        if self.analyzer.config.ai_sentiment_enabled and self.analyzer.config.openai_api_key:
+            embed.set_footer(text="Analysis: keywords + OpenAI AI")
         if item.stock_symbol:
             embed.add_field(name="Symbol", value=item.stock_symbol, inline=True)
         embed.add_field(name="Published", value=item.published, inline=False)
@@ -407,6 +444,12 @@ class BotCommands(commands.Cog):
         embed.add_field(name="Trading", value=trade_status, inline=False)
         if self.bot.forwarder:
             embed.add_field(name="Session forwarder", value=self.bot.forwarder.get_status(), inline=False)
+        ai_on = self.bot.analyzer.config.ai_sentiment_enabled and self.bot.analyzer.config.openai_api_key
+        embed.add_field(
+            name="AI sentiment",
+            value=f"enabled ({self.bot.analyzer.config.openai_model})" if ai_on else "disabled",
+            inline=False,
+        )
 
         await interaction.response.send_message(embed=embed)
 
