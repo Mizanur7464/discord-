@@ -7,7 +7,7 @@ import re
 from dataclasses import dataclass
 
 from bot.news.ai_sentiment import AISentimentError, classify_headline
-from bot.news.symbols import NUNTIO_FIRST_LINE, extract_stock_symbol
+from bot.news.symbols import extract_stock_symbol, is_nuntio_header_line
 from bot.utils.config import NewsConfig
 from bot.utils.timing import mark_step
 
@@ -111,7 +111,7 @@ class MessageAnalyzer:
             return text.strip()
 
         idx = 0
-        if NUNTIO_FIRST_LINE.match(lines[0]):
+        if is_nuntio_header_line(lines[0]):
             idx = 1
 
         while idx < len(lines):
