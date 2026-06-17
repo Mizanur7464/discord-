@@ -132,6 +132,8 @@ def is_weak_headline(headline: str, symbol: str = "") -> bool:
         return True
     if symbol and text.upper() == symbol.upper():
         return True
+    if text.lower() in {"news article", "nuntiobot", "loading", "just a moment..."}:
+        return True
     if _line_is_ticker_only(text):
         return True
     return False

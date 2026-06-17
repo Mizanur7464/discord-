@@ -387,6 +387,8 @@ class NewsTradingBot(commands.Bot):
             message_id=message_id,
             timing_key=key,
         )
+        if item and not item.stock_symbol:
+            item.stock_symbol = extract_stock_symbol(f"{title}\n{body}")
         if item and message and block.strip():
             block_headline = self._resolve_block_headline(block, message, url)
             if block_headline and len(block_headline) > len(item.title or ""):

@@ -13,8 +13,20 @@ import aiohttp
 logger = logging.getLogger(__name__)
 
 TITLE_PATTERN = re.compile(r"<h1[^>]*>(.*?)</h1>", re.IGNORECASE | re.DOTALL)
+TITLE_TAG_PATTERN = re.compile(r"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
+MAIN_TEXT_PATTERN = re.compile(
+    r'<div class="main-text"[^>]*>(.*?)</div>\s*(?:</div>|$)',
+    re.IGNORECASE | re.DOTALL,
+)
+CONTENT_CONTAINER_PATTERN = re.compile(
+    r'<div class="content-container"[^>]*>(.*?)</div>\s*</body>',
+    re.IGNORECASE | re.DOTALL,
+)
+STYLE_SCRIPT_PATTERN = re.compile(r"<(style|script)[^>]*>.*?</\1>", re.IGNORECASE | re.DOTALL)
 TAG_PATTERN = re.compile(r"<[^>]+>")
 WHITESPACE_PATTERN = re.compile(r"\s+")
+
+GENERIC_TITLES = frozenset({"news article", "nuntiobot", "loading", "just a moment..."})
 
 BROWSER_HEADERS = {
     "User-Agent": (
@@ -64,19 +76,56 @@ def _request_headers(url: str) -> dict[str, str]:
     }
 
 
+def _extract_title(html: str) -> str:
+    for pattern in (TITLE_PATTERN, TITLE_TAG_PATTERN):
+        match = pattern.search(html)
+        if match:
+            title = _clean_html(match.group(1))
+            if title and title.lower() not in GENERIC_TITLES and len(title) >= 15:
+                return title
+    return ""
+
+
+def _extract_body(html: str, title: str) -> str:
+    main_match = MAIN_TEXT_PATTERN.search(html)
+    if main_match:
+        body = _clean_html(main_match.group(1))
+        if len(body) >= 50 and not body.startswith("body {"):
+            return body[:4000]
+
+    container_match = CONTENT_CONTAINER_PATTERN.search(html)
+    if container_match:
+        body = _clean_html(container_match.group(1))
+        if title and body.startswith(title):
+            body = body[len(title) :].strip()
+        if len(body) >= 50 and not body.startswith("body {"):
+            return body[:4000]
+
+    return title
+
+
+def _is_weak_article(title: str, body: str) -> bool:
+    cleaned_title = title.strip()
+    if len(cleaned_title) < 15 or cleaned_title.lower() in GENERIC_TITLES:
+        return True
+    cleaned_body = body.strip()
+    if cleaned_body.startswith("body {") or (cleaned_body and len(cleaned_body) < 30):
+        return True
+    return False
+
+
 def _parse_article_html(html: str) -> tuple[str, str]:
-    title_match = TITLE_PATTERN.search(html)
-    title = _clean_html(title_match.group(1)) if title_match else "News Article"
+    html = STYLE_SCRIPT_PATTERN.sub(" ", html)
+    title = _extract_title(html)
+    if not title:
+        raise UrlFetchError("No article title found on page.")
 
-    body = _clean_html(html)
-    if title and body.startswith(title):
-        body = body[len(title) :].strip()
-
-    if len(body) > 4000:
-        body = body[:4000]
-
+    body = _extract_body(html, title)
     if not body:
-        raise UrlFetchError("No article content found on page.")
+        body = title
+
+    if _is_weak_article(title, body):
+        raise UrlFetchError("Article page loaded but headline/content missing.")
 
     return title, body
 
@@ -112,7 +161,9 @@ def _fetch_with_playwright(url: str) -> tuple[str, str]:
         browser = playwright.chromium.launch(headless=True)
         try:
             page = browser.new_page(user_agent=BROWSER_HEADERS["User-Agent"])
-            page.goto(url, wait_until="domcontentloaded", timeout=25000)
+            page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            page.wait_for_selector("h1", timeout=20000)
+            page.wait_for_timeout(500)
             html = page.content()
         finally:
             browser.close()
@@ -121,18 +172,29 @@ def _fetch_with_playwright(url: str) -> tuple[str, str]:
 
 async def fetch_article(url: str) -> tuple[str, str]:
     """Return (title, body text) from a news article URL."""
-    try:
-        return await _fetch_with_aiohttp(url)
-    except UrlFetchError as exc:
-        if "403" not in str(exc):
-            raise
-        logger.warning("HTTP 403 for %s — retrying with Playwright", url)
+    last_error: Exception | None = None
 
     try:
-        return await asyncio.to_thread(_fetch_with_playwright, url)
+        title, body = await _fetch_with_aiohttp(url)
+        logger.info("Fetched article (HTTP): %s", title[:100])
+        return title, body
+    except UrlFetchError as exc:
+        last_error = exc
+        if "403" not in str(exc):
+            logger.warning("HTTP fetch weak/failed for %s: %s — retrying with Playwright", url, exc)
+
+    if last_error and "403" in str(last_error):
+        logger.warning("HTTP 403 for %s — retrying with Playwright", url)
+    elif last_error:
+        logger.warning("Retrying %s with Playwright after: %s", url, last_error)
+
+    try:
+        title, body = await asyncio.to_thread(_fetch_with_playwright, url)
+        logger.info("Fetched article (Playwright): %s", title[:100])
+        return title, body
     except ImportError:
         raise UrlFetchError(
-            f"HTTP 403 for {url} and Playwright is not installed"
+            f"HTTP fetch failed for {url} and Playwright is not installed"
         ) from None
     except Exception as exc:
         raise UrlFetchError(f"Playwright fetch failed for {url}: {exc}") from exc
