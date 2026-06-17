@@ -8,9 +8,15 @@ from dataclasses import dataclass
 
 SYMBOL_PATTERN = re.compile(r"\b([A-Z]{2,5})\b")
 LABELED_VOLUME_PATTERN = re.compile(
-    r"\b(?:1m|2m|5m|10m|vol|volume|f)\s*:?\s*([0-9][0-9,.]*\.?[0-9]*)\s*([KMB]?)\b",
+    r"\b(?:1m|2m|5m|10m|vol|volume)\s*:?\s*([0-9][0-9,.]*\.?[0-9]*)\s*([KMB]?)\b",
     re.IGNORECASE,
 )
+RVOL_PATTERN = re.compile(r"\bRVol\s*:?\s*([0-9]+(?:\.[0-9]+)?)\b", re.IGNORECASE)
+FLOAT_PATTERN = re.compile(
+    r"\bFloat\s*:?\s*([0-9][0-9,.]*\.?[0-9]*)\s*([KMB]?)\b",
+    re.IGNORECASE,
+)
+PRICE_PATTERN = re.compile(r"\$([0-9]+(?:\.[0-9]+)?)\b")
 NOISE_SYMBOLS = {
     "THE",
     "AND",
@@ -22,6 +28,9 @@ NOISE_SYMBOLS = {
     "HOD",
     "CTB",
     "VOL",
+    "RVOL",
+    "FLOAT",
+    "PRICE",
 }
 
 
@@ -31,6 +40,9 @@ class VolumeSignal:
     value: float
     raw: str
     seen_at: float
+    relative_volume: float | None = None
+    float_shares: float | None = None
+    price: float | None = None
 
     @property
     def age_seconds(self) -> float:
@@ -38,7 +50,12 @@ class VolumeSignal:
 
     @property
     def label(self) -> str:
-        return f"{self.symbol} volume {self.value:,.0f}"
+        parts = [f"{self.symbol} volume {self.value:,.0f}"]
+        if self.relative_volume is not None:
+            parts.append(f"RVol {self.relative_volume:g}")
+        if self.float_shares is not None:
+            parts.append(f"Float {self.float_shares:,.0f}")
+        return " / ".join(parts)
 
 
 def _parse_number(value: str, suffix: str) -> float:
@@ -64,7 +81,21 @@ def _candidate_symbols(text: str) -> list[str]:
     return symbols
 
 
-def parse_volume_signals(text: str, *, min_value: float) -> list[VolumeSignal]:
+def _parse_optional(pattern: re.Pattern[str], text: str) -> float | None:
+    match = pattern.search(text)
+    if not match:
+        return None
+    if len(match.groups()) == 1:
+        return float(match.group(1).replace(",", ""))
+    return _parse_number(match.group(1), match.group(2))
+
+
+def parse_volume_signals(
+    text: str,
+    *,
+    min_value: float,
+    min_relative_volume: float,
+) -> list[VolumeSignal]:
     """Parse mosquito-style volume cards.
 
     The mosquito channel usually includes labels like 1m/2m/5m/10m/F. Nuntio
@@ -73,30 +104,53 @@ def parse_volume_signals(text: str, *, min_value: float) -> list[VolumeSignal]:
     if not text.strip():
         return []
 
-    matches = list(LABELED_VOLUME_PATTERN.finditer(text))
-    if not matches:
+    volume_matches = list(LABELED_VOLUME_PATTERN.finditer(text))
+    relative_volume = _parse_optional(RVOL_PATTERN, text)
+    float_shares = _parse_optional(FLOAT_PATTERN, text)
+    price = _parse_optional(PRICE_PATTERN, text)
+
+    if not volume_matches and relative_volume is None:
         return []
 
-    max_value = max(_parse_number(match.group(1), match.group(2)) for match in matches)
-    if max_value < min_value:
+    max_value = (
+        max(_parse_number(match.group(1), match.group(2)) for match in volume_matches)
+        if volume_matches
+        else 0
+    )
+    volume_confirmed = max_value >= min_value
+    rvol_confirmed = relative_volume is not None and relative_volume >= min_relative_volume
+    if not volume_confirmed and not rvol_confirmed:
         return []
 
     symbols = _candidate_symbols(text)
     now = time.time()
     return [
-        VolumeSignal(symbol=symbol, value=max_value, raw=text[:500], seen_at=now)
+        VolumeSignal(
+            symbol=symbol,
+            value=max_value,
+            raw=text[:500],
+            seen_at=now,
+            relative_volume=relative_volume,
+            float_shares=float_shares,
+            price=price,
+        )
         for symbol in symbols
     ]
 
 
 class VolumeSignalTracker:
-    def __init__(self, *, min_value: float, confirm_seconds: int):
+    def __init__(self, *, min_value: float, min_relative_volume: float, confirm_seconds: int):
         self.min_value = min_value
+        self.min_relative_volume = min_relative_volume
         self.confirm_seconds = confirm_seconds
         self._signals: dict[str, VolumeSignal] = {}
 
     def update_from_text(self, text: str) -> list[VolumeSignal]:
-        signals = parse_volume_signals(text, min_value=self.min_value)
+        signals = parse_volume_signals(
+            text,
+            min_value=self.min_value,
+            min_relative_volume=self.min_relative_volume,
+        )
         for signal in signals:
             self._signals[signal.symbol] = signal
         self._trim()

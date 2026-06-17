@@ -39,6 +39,7 @@ class NewsTradingBot(commands.Bot):
         self.trading_engine = TradingEngine(settings)
         self.volume_tracker = VolumeSignalTracker(
             min_value=settings.trading.mosquito_volume_min_value,
+            min_relative_volume=settings.trading.mosquito_min_relative_volume,
             confirm_seconds=settings.trading.mosquito_volume_confirm_minutes * 60,
         )
         self._monitoring = False
