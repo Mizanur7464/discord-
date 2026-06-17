@@ -1,4 +1,4 @@
-"""OpenAI headline sentiment for news trading signals."""
+"""OpenAI news sentiment for trading signals."""
 
 from __future__ import annotations
 
@@ -12,19 +12,19 @@ logger = logging.getLogger(__name__)
 
 OPENAI_CHAT_URL = "https://api.openai.com/v1/chat/completions"
 
-SYSTEM_PROMPT = """You classify US stock news headlines for a fast day-trading bot.
+SYSTEM_PROMPT = """You classify US stock news for a fast day-trading bot.
 
 Return JSON only:
 {"sentiment":"bullish"|"ignored"|"neutral","reason":"short phrase"}
 
-bullish = clear positive catalyst to buy (patent granted, partnership, contract win, FDA approval, upgrade, compliance regained, strong growth beat, acquisition, license deal)
+bullish = clear positive catalyst to buy (patent granted, partnership, contract win, FDA approval, upgrade, compliance regained, strong growth beat, acquisition, license deal, major new product launch with near-term commercial impact)
 ignored = clear negative (offering, dilution, bankruptcy, delisting, probe, resignation, missed earnings, revenue down, default)
-neutral = routine filings, unclear impact, not a trade catalyst, OR headline too short / missing context to decide
+neutral = routine filings, awards/nominations, unclear impact, PR with no near-term trading catalyst, or not enough information
 
-If the headline is only a ticker symbol or gives no real news text, return neutral with reason "insufficient headline".
+Read the headline and article text. Use the article text to understand the real catalyst, but ignore company boilerplate and generic "AI company" descriptions.
+If there is not enough real news text, return neutral with reason "insufficient news text".
 Do not return ignored unless the headline clearly describes negative news.
-
-Judge the headline only. Ignore company boilerplate about being an AI company unless the headline itself is the catalyst."""
+Keep the reason buyer-friendly and specific; do not say "insufficient headline" when article text was provided."""
 
 
 class AISentimentError(Exception):
@@ -63,16 +63,25 @@ async def classify_headline(
     api_key: str,
     model: str = "gpt-4o-mini",
     symbol: str = "",
+    article_text: str = "",
     timeout: float = 10.0,
 ) -> tuple[str, str]:
-    """Classify a headline as bullish, ignored, or neutral."""
+    """Classify a news headline and optional article text as bullish, ignored, or neutral."""
     headline = headline.strip()
     if not headline:
         return "neutral", "empty headline"
     if not api_key:
         raise AISentimentError("OpenAI API key not configured")
 
-    user_text = headline if not symbol else f"Symbol: {symbol}\nHeadline: {headline}"
+    article_text = article_text.strip()
+    if len(article_text) > 3500:
+        article_text = article_text[:3500]
+
+    user_text = f"Headline: {headline}"
+    if symbol:
+        user_text = f"Symbol: {symbol}\n{user_text}"
+    if article_text and article_text != headline:
+        user_text = f"{user_text}\n\nArticle text:\n{article_text}"
 
     payload = {
         "model": model,

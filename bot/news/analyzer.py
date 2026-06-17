@@ -64,6 +64,7 @@ class MessageAnalyzer:
         headline: str,
         *,
         symbol: str = "",
+        article_text: str = "",
         timing_key: str = "",
     ) -> tuple[str, str]:
         if not headline.strip():
@@ -83,11 +84,14 @@ class MessageAnalyzer:
                 api_key=self.config.openai_api_key,
                 model=self.config.openai_model,
                 symbol=symbol,
+                article_text=article_text,
             )
             label = f"AI: {reason}"
             reason_lower = reason.lower()
             if sentiment == "ignored" and any(marker in reason_lower for marker in INSUFFICIENT_INFO_MARKERS):
-                return "neutral", f"AI: insufficient headline ({reason})"
+                return "neutral", "AI: no clear trade catalyst"
+            if sentiment == "neutral" and any(marker in reason_lower for marker in INSUFFICIENT_INFO_MARKERS):
+                return "neutral", "AI: no clear trade catalyst"
             if sentiment == "neutral":
                 return "neutral", label
             return sentiment, label
@@ -104,7 +108,12 @@ class MessageAnalyzer:
         timing_key: str = "",
     ) -> tuple[str, str]:
         head = headline or self.extract_headline(text)
-        return await self._classify_with_ai(head, symbol=symbol, timing_key=timing_key)
+        return await self._classify_with_ai(
+            head,
+            symbol=symbol,
+            article_text=text,
+            timing_key=timing_key,
+        )
 
     async def analyze_text_async(
         self,
