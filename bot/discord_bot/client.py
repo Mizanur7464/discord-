@@ -9,6 +9,7 @@ import discord
 from discord.ext import commands
 
 from bot.news.analyzer import MessageAnalyzer, NewsItem
+from bot.news.mosquito_vision import analyze_mosquito_image_urls
 from bot.news.symbols import extract_nuntio_headline, extract_stock_symbol, split_news_blocks
 from bot.news.url_fetcher import UrlFetchError, extract_urls, fetch_article, is_allowed_url
 from bot.news.volume_signal import VolumeSignalTracker
@@ -143,6 +144,19 @@ class NewsTradingBot(commands.Bot):
                 if field.value:
                     parts.append(field.value)
         return "\n".join(part for part in parts if part)
+
+    def _collect_image_urls(self, message: discord.Message) -> list[str]:
+        urls: list[str] = []
+        for attachment in message.attachments:
+            content_type = (attachment.content_type or "").lower()
+            if content_type.startswith("image/") or attachment.url.lower().endswith((".png", ".jpg", ".jpeg", ".webp")):
+                urls.append(attachment.url)
+        for embed in message.embeds:
+            if embed.image and embed.image.url:
+                urls.append(embed.image.url)
+            if embed.thumbnail and embed.thumbnail.url:
+                urls.append(embed.thumbnail.url)
+        return list(dict.fromkeys(urls))
 
     def _extract_urls_from_message(self, message: discord.Message) -> list[str]:
         return self._extract_allowed_urls(self._collect_message_text(message))
@@ -288,6 +302,15 @@ class NewsTradingBot(commands.Bot):
 
         if self.settings.trading.mosquito_volume_filter_enabled:
             volume_signals = self.volume_tracker.update_from_text(text)
+            if not volume_signals:
+                image_text = await asyncio.to_thread(
+                    analyze_mosquito_image_urls,
+                    self._collect_image_urls(message),
+                    api_key=self.settings.news.openai_api_key,
+                    model=self.settings.news.openai_model,
+                )
+                if image_text:
+                    volume_signals = self.volume_tracker.update_from_text(image_text)
             if volume_signals:
                 symbols = ", ".join(signal.label for signal in volume_signals[:8])
                 logger.info("Mosquito volume signal stored: %s", symbols)

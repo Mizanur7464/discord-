@@ -6,6 +6,7 @@ import logging
 import threading
 from typing import TYPE_CHECKING, Any
 
+from bot.news.mosquito_vision import analyze_mosquito_image_urls
 from bot.news.symbols import extract_stock_symbol
 from bot.news.url_fetcher import extract_urls, is_allowed_url
 from bot.utils.timing import mark_news
@@ -138,6 +139,12 @@ class SessionForwarder:
                 text = self._build_text(data)
                 urls, symbol = self._signal_from_text(text)
 
+        if not urls and not symbol:
+            image_text = self._extract_text_from_images(data)
+            if image_text:
+                text = "\n".join(part for part in (text, image_text) if part)
+                urls, symbol = self._signal_from_text(text)
+
         if not text:
             logger.info("Forwarder skip %s — empty message body", message_id)
             return
@@ -161,6 +168,42 @@ class SessionForwarder:
 
         author = data.get("author", {}).get("username", "?")
         logger.info("Forwarded news from channel %s (by %s)%s", channel_id, author, f" [{symbol}]" if symbol else "")
+
+    def _collect_image_urls(self, data: dict) -> list[str]:
+        urls: list[str] = []
+
+        for attachment in data.get("attachments") or []:
+            content_type = str(attachment.get("content_type", "")).lower()
+            url = attachment.get("url") or attachment.get("proxy_url")
+            if url and (content_type.startswith("image/") or any(str(url).lower().endswith(ext) for ext in (".png", ".jpg", ".jpeg", ".webp"))):
+                urls.append(str(url))
+
+        for embed in data.get("embeds") or []:
+            for key in ("image", "thumbnail"):
+                image = embed.get(key) or {}
+                url = image.get("url") or image.get("proxy_url")
+                if url:
+                    urls.append(str(url))
+
+        unique: list[str] = []
+        for url in urls:
+            if url not in unique:
+                unique.append(url)
+        return unique
+
+    def _extract_text_from_images(self, data: dict) -> str:
+        image_urls = self._collect_image_urls(data)
+        if not image_urls:
+            return ""
+
+        text = analyze_mosquito_image_urls(
+            image_urls,
+            api_key=self.settings.news.openai_api_key,
+            model=self.settings.news.openai_model,
+        )
+        if text:
+            logger.info("Mosquito image OCR extracted %s image(s)", len(image_urls))
+        return text
 
     def _build_text(self, data: dict) -> str:
         parts: list[str] = []
