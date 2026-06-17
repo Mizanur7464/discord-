@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 from bot.news.mosquito_vision import analyze_mosquito_image_urls
 from bot.news.symbols import extract_stock_symbol
 from bot.news.url_fetcher import extract_urls, is_allowed_url
+from bot.news.volume_signal import parse_volume_signals
 from bot.utils.timing import mark_news
 
 if TYPE_CHECKING:
@@ -118,6 +119,14 @@ class SessionForwarder:
         domains = self.settings.news.allowed_url_domains
         urls = [u for u in extract_urls(text) if is_allowed_url(u, domains)]
         symbol = extract_stock_symbol(text)
+        if not symbol and self.settings.trading.mosquito_volume_filter_enabled:
+            volume_signals = parse_volume_signals(
+                text,
+                min_value=self.settings.trading.mosquito_volume_min_value,
+                min_relative_volume=self.settings.trading.mosquito_min_relative_volume,
+            )
+            if volume_signals:
+                symbol = volume_signals[0].symbol
         return urls, symbol
 
     def _handle_message(self, bot, data: dict) -> None:

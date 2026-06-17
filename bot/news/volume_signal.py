@@ -7,13 +7,15 @@ import time
 from dataclasses import dataclass
 
 SYMBOL_PATTERN = re.compile(r"\b([A-Z]{2,5})\b")
+ANSI_ESCAPE_PATTERN = re.compile(r"\x1b\[[0-9;]*m")
+CODE_FENCE_PATTERN = re.compile(r"```(?:ansi)?|```", re.IGNORECASE)
 LABELED_VOLUME_PATTERN = re.compile(
-    r"\b(?:1m|2m|5m|10m|vol|volume)\s*:?\s*([0-9][0-9,.]*\.?[0-9]*)\s*([KMB]?)\b",
+    r"\b(?:1m|2m|5m|10m|1D|vol|volume)\s*:?\s*([0-9][0-9,.]*\.?[0-9]*)\s*([KMB]?)\b",
     re.IGNORECASE,
 )
 RVOL_PATTERN = re.compile(r"\bRVol\s*:?\s*([0-9]+(?:\.[0-9]+)?)\b", re.IGNORECASE)
 FLOAT_PATTERN = re.compile(
-    r"\bFloat\s*:?\s*([0-9][0-9,.]*\.?[0-9]*)\s*([KMB]?)\b",
+    r"\b(?:Float|F)\s*:?\s*([0-9][0-9,.]*\.?[0-9]*)\s*([KMB]?)\b",
     re.IGNORECASE,
 )
 PRICE_PATTERN = re.compile(r"\$([0-9]+(?:\.[0-9]+)?)\b")
@@ -31,6 +33,11 @@ NOISE_SYMBOLS = {
     "RVOL",
     "FLOAT",
     "PRICE",
+    "NHOD",
+    "NLOD",
+    "NSH",
+    "NSL",
+    "ANSI",
 }
 
 
@@ -70,6 +77,17 @@ def _parse_number(value: str, suffix: str) -> float:
     return number
 
 
+def clean_mosquito_text(text: str) -> str:
+    """Strip Discord ANSI/codeblock wrappers and normalize separators."""
+    text = ANSI_ESCAPE_PATTERN.sub("", text)
+    text = CODE_FENCE_PATTERN.sub("", text)
+    text = text.replace("|", " ")
+    text = text.replace("▯", " ")
+    text = text.replace("│", " ")
+    text = text.replace("`", "")
+    return re.sub(r"\s+", " ", text).strip()
+
+
 def _candidate_symbols(text: str) -> list[str]:
     symbols: list[str] = []
     for match in SYMBOL_PATTERN.finditer(text):
@@ -101,6 +119,7 @@ def parse_volume_signals(
     The mosquito channel usually includes labels like 1m/2m/5m/10m/F. Nuntio
     news messages do not, so this avoids treating market-cap labels as volume.
     """
+    text = clean_mosquito_text(text)
     if not text.strip():
         return []
 
