@@ -26,7 +26,17 @@ STYLE_SCRIPT_PATTERN = re.compile(r"<(style|script)[^>]*>.*?</\1>", re.IGNORECAS
 TAG_PATTERN = re.compile(r"<[^>]+>")
 WHITESPACE_PATTERN = re.compile(r"\s+")
 
-GENERIC_TITLES = frozenset({"news article", "nuntiobot", "loading", "just a moment..."})
+GENERIC_TITLES = frozenset(
+    {
+        "news article",
+        "nuntiobot",
+        "loading",
+        "just a moment...",
+        "just a moment",
+        "attention required",
+        "access denied",
+    }
+)
 
 BROWSER_HEADERS = {
     "User-Agent": (
@@ -40,6 +50,12 @@ BROWSER_HEADERS = {
     "Pragma": "no-cache",
     "Upgrade-Insecure-Requests": "1",
 }
+
+CHROMIUM_ARGS = [
+    "--no-sandbox",
+    "--disable-dev-shm-usage",
+    "--disable-blink-features=AutomationControlled",
+]
 
 
 class UrlFetchError(Exception):
@@ -114,7 +130,7 @@ def _is_weak_article(title: str, body: str) -> bool:
     return False
 
 
-def _parse_article_html(html: str) -> tuple[str, str]:
+def _parse_article_html(html: str, *, allow_title_only: bool = False) -> tuple[str, str]:
     html = STYLE_SCRIPT_PATTERN.sub(" ", html)
     title = _extract_title(html)
     if not title:
@@ -125,9 +141,45 @@ def _parse_article_html(html: str) -> tuple[str, str]:
         body = title
 
     if _is_weak_article(title, body):
+        if allow_title_only and len(title) >= 15 and title.lower() not in GENERIC_TITLES:
+            return title, title
         raise UrlFetchError("Article page loaded but headline/content missing.")
 
     return title, body
+
+
+def _parse_jina_text(text: str) -> tuple[str, str]:
+    lines = [line.strip() for line in text.strip().split("\n")]
+    title = ""
+    body_start = 0
+
+    for i, line in enumerate(lines):
+        if not line:
+            continue
+        if line.lower().startswith("title:"):
+            title = line.split(":", 1)[1].strip()
+            body_start = i + 1
+            break
+        if line.startswith("# "):
+            title = line[2:].strip()
+            body_start = i + 1
+            break
+        if line.startswith("URL Source:") or line.startswith("Markdown Content:"):
+            body_start = max(body_start, i + 1)
+
+    if not title:
+        for line in lines:
+            if line and len(line) >= 15 and not line.lower().startswith("http"):
+                title = line.lstrip("# ").strip()
+                break
+
+    body = WHITESPACE_PATTERN.sub(" ", "\n".join(lines[body_start:])).strip()
+    if len(body) < 50:
+        body = title
+
+    if _is_weak_article(title, body):
+        raise UrlFetchError("Jina reader returned insufficient content.")
+    return title[:500], body[:4000]
 
 
 async def _fetch_with_aiohttp(url: str) -> tuple[str, str]:
@@ -158,43 +210,75 @@ def _fetch_with_playwright(url: str) -> tuple[str, str]:
     from playwright.sync_api import sync_playwright
 
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=True)
+        browser = playwright.chromium.launch(headless=True, args=CHROMIUM_ARGS)
         try:
             page = browser.new_page(user_agent=BROWSER_HEADERS["User-Agent"])
-            page.goto(url, wait_until="domcontentloaded", timeout=30000)
-            page.wait_for_selector("h1", timeout=20000)
-            page.wait_for_timeout(500)
+            page.goto(url, wait_until="domcontentloaded", timeout=45000)
+
+            for _ in range(45):
+                if page.locator("h1").count() > 0:
+                    break
+                page.wait_for_timeout(1000)
+
             html = page.content()
         finally:
             browser.close()
-    return _parse_article_html(html)
+
+    try:
+        return _parse_article_html(html)
+    except UrlFetchError:
+        return _parse_article_html(html, allow_title_only=True)
+
+
+async def _fetch_with_jina(url: str) -> tuple[str, str]:
+    from aiohttp.resolver import ThreadedResolver
+
+    jina_url = f"https://r.jina.ai/{url}"
+    headers = {
+        "Accept": "text/plain",
+        "User-Agent": BROWSER_HEADERS["User-Agent"],
+    }
+    connector = aiohttp.TCPConnector(resolver=ThreadedResolver())
+
+    async with aiohttp.ClientSession(headers=headers, connector=connector) as session:
+        async with session.get(jina_url, timeout=aiohttp.ClientTimeout(total=60)) as response:
+            if response.status != 200:
+                raise UrlFetchError(f"Jina reader HTTP {response.status} for {url}")
+            text = await response.text()
+
+    return _parse_jina_text(text)
 
 
 async def fetch_article(url: str) -> tuple[str, str]:
     """Return (title, body text) from a news article URL."""
-    last_error: Exception | None = None
+    errors: list[str] = []
 
     try:
         title, body = await _fetch_with_aiohttp(url)
         logger.info("Fetched article (HTTP): %s", title[:100])
         return title, body
     except UrlFetchError as exc:
-        last_error = exc
-        if "403" not in str(exc):
-            logger.warning("HTTP fetch weak/failed for %s: %s — retrying with Playwright", url, exc)
-
-    if last_error and "403" in str(last_error):
-        logger.warning("HTTP 403 for %s — retrying with Playwright", url)
-    elif last_error:
-        logger.warning("Retrying %s with Playwright after: %s", url, last_error)
+        errors.append(f"HTTP: {exc}")
+        if "403" in str(exc):
+            logger.warning("HTTP 403 for %s — retrying with Playwright", url)
+        else:
+            logger.warning("HTTP fetch failed for %s: %s", url, exc)
 
     try:
         title, body = await asyncio.to_thread(_fetch_with_playwright, url)
         logger.info("Fetched article (Playwright): %s", title[:100])
         return title, body
     except ImportError:
-        raise UrlFetchError(
-            f"HTTP fetch failed for {url} and Playwright is not installed"
-        ) from None
+        errors.append("Playwright not installed")
     except Exception as exc:
-        raise UrlFetchError(f"Playwright fetch failed for {url}: {exc}") from exc
+        errors.append(f"Playwright: {exc}")
+        logger.warning("Playwright fetch failed for %s: %s — trying Jina reader", url, exc)
+
+    try:
+        title, body = await _fetch_with_jina(url)
+        logger.info("Fetched article (Jina): %s", title[:100])
+        return title, body
+    except Exception as exc:
+        errors.append(f"Jina: {exc}")
+        logger.error("All fetch methods failed for %s — %s", url, " | ".join(errors))
+        raise UrlFetchError(f"Could not fetch article: {' | '.join(errors)}") from exc
