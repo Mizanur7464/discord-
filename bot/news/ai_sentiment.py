@@ -21,6 +21,7 @@ bullish = clear positive catalyst to buy (patent granted, partnership, contract 
 ignored = clear negative (offering, dilution, bankruptcy, delisting, probe, resignation, missed earnings, revenue down, default)
 neutral = routine filings, awards/nominations, unclear impact, PR with no near-term trading catalyst, or not enough information
 
+Buyer rule: filter out REITs / real estate investment trusts and low-volatility income/dividend stocks. Return ignored with reason "REIT/low-volatility stock filtered" for those, even if the article sounds positive.
 Read the headline and article text. Use the article text to understand the real catalyst, but ignore company boilerplate and generic "AI company" descriptions.
 If there is not enough real news text, return neutral with reason "insufficient news text".
 Do not return ignored unless the headline clearly describes negative news.
