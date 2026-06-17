@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 import discord
@@ -157,8 +158,16 @@ class NewsTradingBot(commands.Bot):
         )
         trade_msg = trade_result.message if trade_result else None
 
+        if trade_result and trade_result.daily_volume is not None:
+            item.daily_volume = trade_result.daily_volume
+        elif item.stock_symbol:
+            item.daily_volume = await asyncio.to_thread(
+                self.trading_engine.get_daily_volume_for_symbol,
+                item.stock_symbol,
+            )
+
         if item.sentiment == "neutral" and not trade_msg:
-            trade_msg = "No trade — no keyword match"
+            trade_msg = f"No trade — {item.ai_reason or 'AI: no catalyst'}"
 
         if key:
             if trade_result and trade_result.success:
@@ -252,7 +261,7 @@ class NewsTradingBot(commands.Bot):
                 message.id,
                 item.stock_symbol or "?",
                 item.sentiment,
-                item.matched_keyword,
+                item.ai_reason,
             )
 
         if not processed and text.strip():
@@ -336,36 +345,6 @@ class NewsTradingBot(commands.Bot):
             items.append(item)
         return items
 
-    def _message_to_items(self, message: discord.Message, *, source: str) -> list[NewsItem]:
-        text = self._collect_message_text(message)
-        published = message.created_at.strftime("%Y-%m-%d %H:%M UTC")
-        items: list[NewsItem] = []
-
-        for block in split_news_blocks(text):
-            item = self.analyzer.analyze_text(
-                block,
-                source=source,
-                published=published,
-                message_id=str(message.id),
-                jump_url=message.jump_url,
-            )
-            if not item:
-                continue
-            symbol = extract_stock_symbol(block)
-            if symbol:
-                item.stock_symbol = symbol
-            items.append(item)
-        return items
-
-    def _message_to_item(self, message: discord.Message) -> NewsItem | None:
-        source = (
-            f"{message.guild.name} / #{getattr(message.channel, 'name', 'unknown')}"
-            if message.guild
-            else "DM"
-        )
-        items = self._message_to_items(message, source=source)
-        return items[0] if items else None
-
     async def send_news_alert(self, item: NewsItem, trade_msg: str | None = None) -> None:
         if not self._alert_channel:
             return
@@ -386,9 +365,11 @@ class NewsTradingBot(commands.Bot):
             url=item.link or None,
         )
         embed.add_field(name="Source", value=item.source, inline=True)
-        embed.add_field(name="Keyword", value=item.matched_keyword, inline=True)
+        embed.add_field(name="AI Says", value=item.ai_reason, inline=True)
+        if item.daily_volume is not None:
+            embed.add_field(name="Volume", value=f"{item.daily_volume:,} daily", inline=True)
         if self.analyzer.config.ai_sentiment_enabled and self.analyzer.config.openai_api_key:
-            embed.set_footer(text="Analysis: keywords + OpenAI AI")
+            embed.set_footer(text="Analysis: OpenAI AI")
         if item.stock_symbol:
             embed.add_field(name="Symbol", value=item.stock_symbol, inline=True)
         embed.add_field(name="Published", value=item.published, inline=False)
@@ -397,7 +378,7 @@ class NewsTradingBot(commands.Bot):
             action = trade_msg or "No trade — ignored signal"
             embed.add_field(name="Action", value=action, inline=False)
         elif item.sentiment == "neutral":
-            action = trade_msg or "No trade — no keyword match"
+            action = trade_msg or f"No trade — {item.ai_reason or 'AI: no catalyst'}"
             embed.add_field(name="Action", value=action, inline=False)
         elif trade_msg:
             embed.add_field(name="Trade", value=trade_msg, inline=False)
@@ -423,7 +404,6 @@ class BotCommands(commands.Cog):
             ("/start", "Start news monitoring"),
             ("/stop", "Stop news monitoring"),
             ("/check", "Scan recent messages from news channels"),
-            ("/keywords", "Show keyword list"),
         ]
         for name, desc in commands_list:
             embed.add_field(name=name, value=desc, inline=False)
@@ -447,7 +427,7 @@ class BotCommands(commands.Cog):
         ai_on = self.bot.analyzer.config.ai_sentiment_enabled and self.bot.analyzer.config.openai_api_key
         embed.add_field(
             name="AI sentiment",
-            value=f"enabled ({self.bot.analyzer.config.openai_model})" if ai_on else "disabled",
+            value=f"OpenAI ({self.bot.analyzer.config.openai_model})" if ai_on else "disabled",
             inline=False,
         )
 
@@ -517,27 +497,14 @@ class BotCommands(commands.Cog):
         await self.bot.send_news_alert(item, trade_msg)
 
         if item.sentiment == "bullish":
-            note = f"Buy signal — alert sent ({item.matched_keyword})."
+            note = f"Buy signal — {item.ai_reason}"
         elif item.sentiment == "ignored":
-            note = f"Ignored — {item.matched_keyword}."
+            note = f"Ignored — {item.ai_reason}."
         elif item.sentiment == "neutral":
-            note = "Neutral — alert sent, no trade."
+            note = f"Neutral — {item.ai_reason or 'AI: no catalyst'}"
         else:
             note = "Alert sent."
         await interaction.followup.send(note)
-
-    @discord.app_commands.command(name="keywords", description="Show keyword list")
-    async def keywords_cmd(self, interaction: discord.Interaction) -> None:
-        kw = self.bot.settings.news.keywords
-        bullish = ", ".join(kw.get("bullish", [])) or "none"
-        ignore = ", ".join(kw.get("ignore", [])) or "none"
-
-        embed = discord.Embed(title="Keyword List", color=discord.Color.gold())
-        embed.add_field(name="Buy signals", value=bullish, inline=False)
-        embed.add_field(name="Ignore signals", value=ignore, inline=False)
-        embed.set_footer(text="Edit config/settings.yaml to change keywords")
-
-        await interaction.response.send_message(embed=embed)
 
 
 async def run_bot(settings: Settings, forwarder: SessionForwarder | None = None) -> None:

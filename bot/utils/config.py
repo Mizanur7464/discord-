@@ -17,19 +17,14 @@ ENV_PATH = ROOT_DIR / ".env"
 @dataclass
 class NewsConfig:
     source_channel_ids: list[int]
-    keywords: dict[str, list[str]]
     allowed_url_domains: list[str]
     process_all_messages: bool = False
     always_process_urls: bool = True
     alert_all_news: bool = True
-    headline_only_bullish: bool = True
     trusted_news_bots: list[str] | None = None
     ai_sentiment_enabled: bool = True
-    ai_on_neutral_only: bool = True
     openai_model: str = "gpt-4o-mini"
     openai_api_key: str = ""
-    check_negation: bool = True
-    negation_words: list[str] | None = None
 
 
 @dataclass
@@ -135,19 +130,14 @@ def load_settings() -> Settings:
         bot=BotConfig(**raw["bot"]),
         news=NewsConfig(
             source_channel_ids=_parse_channel_ids(source_channels),
-            keywords=news_raw["keywords"],
             allowed_url_domains=news_raw.get("allowed_url_domains", ["news.nuntiobot.com"]),
             process_all_messages=news_raw.get("process_all_messages", False),
             always_process_urls=news_raw.get("always_process_urls", True),
             alert_all_news=news_raw.get("alert_all_news", True),
-            headline_only_bullish=news_raw.get("headline_only_bullish", True),
             trusted_news_bots=news_raw.get("trusted_news_bots", ["nuntio"]),
             ai_sentiment_enabled=news_raw.get("ai_sentiment_enabled", True),
-            ai_on_neutral_only=news_raw.get("ai_on_neutral_only", True),
             openai_model=news_raw.get("openai_model", "gpt-4o-mini"),
             openai_api_key=os.getenv("OPENAI_API_KEY", "").strip(),
-            check_negation=news_raw.get("check_negation", True),
-            negation_words=news_raw.get("negation_words"),
         ),
         trading=TradingConfig(
             enabled=trading_raw["enabled"],

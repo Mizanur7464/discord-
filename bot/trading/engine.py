@@ -29,6 +29,7 @@ class TradeResult:
     amount: float
     price: float | None = None
     paper: bool = True
+    daily_volume: int | None = None
 
 
 class TradingEngine:
@@ -128,20 +129,43 @@ class TradingEngine:
             return float(data.bid_price)
         raise ValueError(f"No quote available for {symbol}")
 
-    def _resolve_trade_amount(self, symbol: str) -> tuple[float, str]:
-        """Apply low-volume rules. Returns (amount_usd, note for logs/alerts)."""
-        cfg = self.settings.trading
-        if not cfg.volume_filter_enabled:
-            return cfg.trade_amount_usd, ""
-
+    def get_daily_volume_for_symbol(self, symbol: str) -> int | None:
+        if not symbol:
+            return None
         try:
             _, data_client = self._get_clients()
-            volume = get_daily_volume(data_client, symbol)
+            return get_daily_volume(data_client, symbol.upper())
+        except Exception as exc:
+            logger.warning("Volume lookup failed for %s: %s", symbol, exc)
+            return None
+
+    def _resolve_trade_amount(self, symbol: str) -> tuple[float, str, int | None]:
+        """Apply volume rules. Returns (amount_usd, note, daily_volume). Never skips when min_volume_skip=0."""
+        cfg = self.settings.trading
+        if not cfg.volume_filter_enabled:
+            return cfg.trade_amount_usd, "", None
+
+        volume: int | None = None
+        try:
+            volume = self.get_daily_volume_for_symbol(symbol)
         except Exception as exc:
             logger.warning("Volume check failed for %s: %s — using reduced size", symbol, exc)
-            return cfg.low_volume_trade_amount_usd, " (volume unknown — reduced size)"
+            return (
+                cfg.low_volume_trade_amount_usd,
+                f" (volume unknown — ${cfg.low_volume_trade_amount_usd:.0f} size)",
+                None,
+            )
 
-        if volume < cfg.min_volume_skip:
+        if volume is None:
+            return (
+                cfg.low_volume_trade_amount_usd,
+                f" (volume unknown — ${cfg.low_volume_trade_amount_usd:.0f} size)",
+                None,
+            )
+
+        logger.info("Volume %s: %s daily (skip below %s, reduced below %s)", symbol, f"{volume:,}", cfg.min_volume_skip, f"{cfg.low_volume_threshold:,}")
+
+        if cfg.min_volume_skip > 0 and volume < cfg.min_volume_skip:
             raise ValueError(
                 f"Low volume skip — {symbol} daily volume {volume:,} "
                 f"< min {cfg.min_volume_skip:,}"
@@ -150,10 +174,11 @@ class TradingEngine:
         if volume < cfg.low_volume_threshold:
             return (
                 cfg.low_volume_trade_amount_usd,
-                f" (high-risk low volume {volume:,} — ${cfg.low_volume_trade_amount_usd:.0f} size)",
+                f" (low volume {volume:,} — ${cfg.low_volume_trade_amount_usd:.0f} high-risk size)",
+                volume,
             )
 
-        return cfg.trade_amount_usd, f" (volume {volume:,})"
+        return cfg.trade_amount_usd, f" (volume {volume:,})", volume
 
     def _log_trade(self, result: TradeResult) -> None:
         logs: list[dict] = []
@@ -169,6 +194,7 @@ class TradingEngine:
                 "price": result.price,
                 "paper": result.paper,
                 "message": result.message,
+                "daily_volume": result.daily_volume,
             }
         )
 
@@ -331,14 +357,16 @@ class TradingEngine:
             )
 
         try:
-            amount_usd, volume_note = self._resolve_trade_amount(stock)
+            amount_usd, volume_note, daily_volume = self._resolve_trade_amount(stock)
         except ValueError as exc:
+            vol = self.get_daily_volume_for_symbol(stock)
             return TradeResult(
                 success=False,
                 message=str(exc),
                 side="blocked",
                 symbol=stock,
                 amount=0,
+                daily_volume=vol,
             )
 
         try:
@@ -376,6 +404,7 @@ class TradingEngine:
             self._trades_today += 1
             self._symbols_today.add(stock)
 
+        result.daily_volume = daily_volume
         self._log_trade(result)
         return result
 

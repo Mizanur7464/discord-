@@ -1,4 +1,4 @@
-"""OpenAI headline sentiment for news without keyword matches."""
+"""OpenAI headline sentiment for news trading signals."""
 
 from __future__ import annotations
 
