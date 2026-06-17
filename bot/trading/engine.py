@@ -84,6 +84,10 @@ class TradingEngine:
             stop_loss = self._round_price_down(price - min_tick, price)
         return take_profit, stop_loss
 
+    def _calc_buy_limit_price(self, price: float) -> float:
+        """Use a small buffer so extended-hours limit buys can fill near the ask."""
+        return self._round_price(price * 1.01)
+
     @staticmethod
     def _calc_qty(amount_usd: float, price: float) -> float:
         raw = amount_usd / price
@@ -373,7 +377,7 @@ class TradingEngine:
             if is_regular_market_hours():
                 result = self._place_bracket_buy(stock, amount_usd, paper, volume_note=volume_note)
             else:
-                result = self._place_market_buy(
+                result = self._place_limit_buy(
                     stock,
                     amount_usd,
                     paper,
@@ -383,13 +387,21 @@ class TradingEngine:
         except Exception as exc:
             logger.error("Buy failed for %s: %s — trying fallback order", stock, exc)
             try:
-                result = self._place_market_buy(
-                    stock,
-                    amount_usd,
-                    paper,
-                    volume_note=volume_note,
-                    extended_hours=not is_regular_market_hours(),
-                )
+                if is_regular_market_hours():
+                    result = self._place_market_buy(
+                        stock,
+                        amount_usd,
+                        paper,
+                        volume_note=volume_note,
+                    )
+                else:
+                    result = self._place_limit_buy(
+                        stock,
+                        amount_usd,
+                        paper,
+                        volume_note=volume_note,
+                        extended_hours=True,
+                    )
             except Exception as fallback_exc:
                 result = TradeResult(
                     success=False,
@@ -446,6 +458,48 @@ class TradingEngine:
             message=(
                 f"[{mode}] BUY {symbol} x{qty} ~${amount_usd:.2f}{volume_note} | "
                 f"TP ${take_profit} | SL ${stop_loss} | Order {order.id}"
+            ),
+            side="buy",
+            symbol=symbol,
+            amount=amount_usd,
+            price=price,
+            paper=paper,
+        )
+
+    def _place_limit_buy(
+        self,
+        symbol: str,
+        amount_usd: float,
+        paper: bool,
+        *,
+        volume_note: str = "",
+        extended_hours: bool = False,
+    ) -> TradeResult:
+        from alpaca.trading.enums import OrderSide, TimeInForce
+        from alpaca.trading.requests import LimitOrderRequest
+
+        trading_client, _ = self._get_clients()
+        price = self._get_last_price(symbol)
+        limit_price = self._calc_buy_limit_price(price)
+        qty = self._calc_qty(amount_usd, price)
+
+        order_data = LimitOrderRequest(
+            symbol=symbol,
+            qty=qty,
+            side=OrderSide.BUY,
+            time_in_force=TimeInForce.DAY,
+            limit_price=limit_price,
+            extended_hours=extended_hours,
+        )
+        order = trading_client.submit_order(order_data)
+
+        mode = "PAPER" if paper else "LIVE"
+        session = " extended" if extended_hours else ""
+        return TradeResult(
+            success=True,
+            message=(
+                f"[{mode}] BUY {symbol} x{qty} ~${amount_usd:.2f}{volume_note} | "
+                f"{session} limit ${limit_price} order {order.id}"
             ),
             side="buy",
             symbol=symbol,
