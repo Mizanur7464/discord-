@@ -1,45 +1,48 @@
-# ============================================
-#  News Trading Bot - Main Settings
-#  Edit this file easily without touching code
-# ============================================
-
-bot:
-  command_prefix: "!"
-  auto_start: true
-
-news:
-  alert_all_news: true          # post every forwarded news to #alerts (including neutral)
-  process_all_messages: false
-  always_process_urls: false
-  trusted_news_bots:           # bot usernames allowed to post in news channel (substring match)
-    - nuntio
-  ai_sentiment_enabled: true    # all buy/ignore/neutral signals decided by OpenAI
-  openai_model: gpt-4o-mini
-
-  allowed_url_domains:
-    - news.nuntiobot.com
-    - nuntiobot.com
-
-trading:
-  enabled: true
-  broker: alpaca
-  default_symbol: ""
-  trade_amount_usd: 100
-  take_profit_percent: 30
-  stop_loss_percent: 3
-  max_trades_per_day: 15
-  one_trade_per_symbol_per_day: true
-  cancel_orders_on_bad_news: true
-  block_saturday: true
-  block_sunday: true
-  block_monday_premarket: false
-  regular_market_hours_only: false          # false = trade extended hours too
-  extended_hours_trading: true             # Mon–Fri 4:00 AM–8:00 PM ET
-  volume_filter_enabled: true
-  min_volume_skip: 0               # 0 = never skip; low volume uses reduced size below
-  low_volume_threshold: 1000000    # below = high risk, use reduced size
-  low_volume_trade_amount_usd: 25  # buy amount for high-risk low-volume stocks
-
-forwarder:
-  enabled: true
-  require_news_url: false   # forward posts with ticker even if link missing
+# ============================================
+#  News Trading Bot - Main Settings
+#  Edit this file easily without touching code
+# ============================================
+
+bot:
+  command_prefix: "!"
+  auto_start: true
+
+news:
+  alert_all_news: true          # post every forwarded news to #alerts (including neutral)
+  process_all_messages: false
+  always_process_urls: false
+  trusted_news_bots:           # bot usernames allowed to post in news channel (substring match)
+    - nuntio
+  ai_sentiment_enabled: true    # all buy/ignore/neutral signals decided by OpenAI
+  openai_model: gpt-4o-mini
+
+  allowed_url_domains:
+    - news.nuntiobot.com
+    - nuntiobot.com
+
+trading:
+  enabled: true
+  broker: alpaca
+  default_symbol: ""
+  trade_amount_usd: 100
+  take_profit_percent: 30
+  stop_loss_percent: 3
+  max_trades_per_day: 15
+  one_trade_per_symbol_per_day: true
+  cancel_orders_on_bad_news: true
+  block_saturday: true
+  block_sunday: true
+  block_monday_premarket: false
+  regular_market_hours_only: false          # false = trade extended hours too
+  extended_hours_trading: true             # Mon–Fri 4:00 AM–8:00 PM ET
+  volume_filter_enabled: true
+  min_volume_skip: 0               # 0 = never skip; low volume uses reduced size below
+  low_volume_threshold: 1000000    # below = high risk, use reduced size
+  low_volume_trade_amount_usd: 25  # buy amount for high-risk low-volume stocks
+  mosquito_volume_filter_enabled: true    # require recent mosquito money-flow/volume confirmation before buy
+  mosquito_volume_min_value: 1000000      # min labeled mosquito volume value to count as confirmation
+  mosquito_volume_confirm_minutes: 60     # volume confirmation stays valid for this many minutes
+
+forwarder:
+  enabled: true
+  require_news_url: false   # forward posts with ticker even if link missing

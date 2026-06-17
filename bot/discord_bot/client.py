@@ -11,6 +11,7 @@ from discord.ext import commands
 from bot.news.analyzer import MessageAnalyzer, NewsItem
 from bot.news.symbols import extract_nuntio_headline, extract_stock_symbol, split_news_blocks
 from bot.news.url_fetcher import UrlFetchError, extract_urls, fetch_article, is_allowed_url
+from bot.news.volume_signal import VolumeSignalTracker
 from bot.trading.engine import TradingEngine
 from bot.utils.config import Settings
 from bot.utils.timing import log_trade_speed, mark_news_if_absent, mark_step
@@ -36,6 +37,10 @@ class NewsTradingBot(commands.Bot):
         self.forwarder = forwarder
         self.analyzer = MessageAnalyzer(settings.news)
         self.trading_engine = TradingEngine(settings)
+        self.volume_tracker = VolumeSignalTracker(
+            min_value=settings.trading.mosquito_volume_min_value,
+            confirm_seconds=settings.trading.mosquito_volume_confirm_minutes * 60,
+        )
         self._monitoring = False
         self._alert_channel: discord.TextChannel | None = None
         self._processed_messages: set[str] = set()
@@ -218,6 +223,26 @@ class NewsTradingBot(commands.Bot):
             mark_news_if_absent(key)
             mark_step(key, "analyze")
 
+        if (
+            self.settings.trading.mosquito_volume_filter_enabled
+            and item.sentiment == "bullish"
+            and item.stock_symbol
+        ):
+            volume_signal = self.volume_tracker.get_recent(item.stock_symbol)
+            if not volume_signal:
+                item.sentiment = "neutral"
+                item.ai_reason = "AI: waiting for mosquito volume confirmation"
+                trade_msg = "No trade — no recent mosquito money-flow/volume signal"
+                if item.stock_symbol:
+                    item.daily_volume = await asyncio.to_thread(
+                        self.trading_engine.get_daily_volume_for_symbol,
+                        item.stock_symbol,
+                    )
+                if key:
+                    log_trade_speed(key, symbol=item.stock_symbol, action="volume-wait")
+                return trade_msg
+            item.ai_reason = f"{item.ai_reason}; mosquito volume confirmed ({volume_signal.value:,.0f})"
+
         trade_result = await self.trading_engine.process_signal(
             item.sentiment,
             symbol=item.stock_symbol,
@@ -259,6 +284,13 @@ class NewsTradingBot(commands.Bot):
         if not text.strip():
             logger.warning("Skip message %s — empty content", message.id)
             return 0
+
+        if self.settings.trading.mosquito_volume_filter_enabled:
+            volume_signals = self.volume_tracker.update_from_text(text)
+            if volume_signals:
+                symbols = ", ".join(signal.label for signal in volume_signals[:8])
+                logger.info("Mosquito volume signal stored: %s", symbols)
+                return 0
 
         published = message.created_at.strftime("%Y-%m-%d %H:%M UTC")
         blocks = split_news_blocks(text)
