@@ -39,6 +39,7 @@ trading:
   min_volume_skip: 0               # 0 = never skip; low volume uses reduced size below
   low_volume_threshold: 1000000    # below = high risk, use reduced size
   low_volume_trade_amount_usd: 25  # buy amount for high-risk low-volume stocks
+  extended_limit_buffer_percent: 2 # extended-hours buy limit = ask + this percent
   mosquito_volume_filter_enabled: true    # require recent mosquito money-flow/volume confirmation before buy
   mosquito_volume_min_value: 1000000      # min labeled mosquito volume value to count as confirmation
   mosquito_min_relative_volume: 2.0       # RVol confirmation from mosquito card

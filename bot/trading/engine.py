@@ -86,7 +86,8 @@ class TradingEngine:
 
     def _calc_buy_limit_price(self, price: float) -> float:
         """Use a small buffer so extended-hours limit buys can fill near the ask."""
-        return self._round_price(price * 1.01)
+        buffer_pct = max(0, self.settings.trading.extended_limit_buffer_percent) / 100
+        return self._round_price(price * (1 + buffer_pct))
 
     @staticmethod
     def _calc_qty(amount_usd: float, price: float) -> float:
