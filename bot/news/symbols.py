@@ -13,6 +13,8 @@ PLAIN_EXCHANGE_TICKER = re.compile(
     re.IGNORECASE,
 )
 CASH_TAG = re.compile(r"\$([A-Z]{1,5})\b")
+URL_PATTERN = re.compile(r"https?://\S+")
+WHITESPACE = re.compile(r"\s+")
 
 # Classic NuntioBot: "79.8 M 🇺🇸 GPUS"
 NUNTIO_FIRST_LINE = re.compile(
@@ -37,6 +39,11 @@ BOLD_TICKER_LINE = re.compile(
     re.DOTALL,
 )
 
+TICKER_HEADLINE_SPLIT = re.compile(
+    r"\*{0,2}[A-Z]{1,5}\*{0,2}\s*(?:[:\-–—|]\s*)(.+)",
+    re.DOTALL,
+)
+
 NUNTIO_HEADER = NUNTIO_TICKER
 
 
@@ -46,6 +53,88 @@ def is_nuntio_header_line(line: str) -> bool:
     if not line:
         return False
     return bool(NUNTIO_FIRST_LINE.match(line) or NUNTIO_TICKER.search(line) or BOLD_TICKER_LINE.search(line))
+
+
+def _clean_headline_text(text: str) -> str:
+    text = re.sub(r"\*\*([^*]+)\*\*", r"\1", text)
+    text = re.sub(r"`([^`]+)`", r"\1", text)
+    text = URL_PATTERN.sub("", text)
+    return WHITESPACE.sub(" ", text).strip()
+
+
+def _line_is_ticker_only(line: str) -> bool:
+    line = _clean_headline_text(line)
+    if not line or len(line) > 40:
+        return False
+    symbol = _ticker_from_line(line)
+    if not symbol:
+        return False
+    remainder = re.sub(
+        r"[\d.,]+\s*[MKBkmb]?|[\U0001F1E6-\U0001F1FF]{2}|:flag_[a-z]{2}:|\*{0,2}[A-Z]{1,5}\*{0,2}",
+        "",
+        line,
+        flags=re.IGNORECASE,
+    )
+    remainder = WHITESPACE.sub("", remainder)
+    return len(remainder) <= 2
+
+
+def extract_nuntio_headline(block: str) -> str:
+    """Extract the news headline from a NuntioBot Discord block."""
+    block = block.strip()
+    if not block:
+        return ""
+
+    without_urls = URL_PATTERN.sub("", block).strip()
+
+    lines = [line.strip() for line in without_urls.split("\n") if line.strip()]
+    for i, line in enumerate(lines):
+        if _line_is_ticker_only(line):
+            if i + 1 < len(lines):
+                next_line = _clean_headline_text(lines[i + 1])
+                if next_line and len(next_line) >= 8:
+                    return next_line
+            continue
+        if is_nuntio_header_line(line):
+            if i + 1 < len(lines):
+                next_line = _clean_headline_text(lines[i + 1])
+                if next_line and len(next_line) >= 8:
+                    return next_line
+            continue
+        cleaned = _clean_headline_text(line)
+        if len(cleaned) >= 8 and not _line_is_ticker_only(cleaned):
+            return cleaned
+
+    one_line = WHITESPACE.sub(" ", without_urls.replace("\n", " ")).strip()
+
+    split_match = TICKER_HEADLINE_SPLIT.search(one_line)
+    if split_match:
+        headline = _clean_headline_text(split_match.group(1))
+        if len(headline) >= 8:
+            return headline
+
+    for pattern in (NUNTIO_TICKER, BOLD_TICKER_LINE, NUNTIO_FIRST_LINE):
+        match = pattern.search(without_urls)
+        if match:
+            rest = without_urls[match.end() :].strip()
+            rest = rest.lstrip(":|-–—| ").strip()
+            rest = _clean_headline_text(rest)
+            if len(rest) >= 8:
+                return rest
+
+    return ""
+
+
+def is_weak_headline(headline: str, symbol: str = "") -> bool:
+    """True when text is too short for reliable AI classification."""
+    text = _clean_headline_text(headline)
+    if len(text) < 12:
+        return True
+    if symbol and text.upper() == symbol.upper():
+        return True
+    if _line_is_ticker_only(text):
+        return True
+    return False
 
 
 def _ticker_from_line(line: str) -> str:

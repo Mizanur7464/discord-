@@ -19,7 +19,10 @@ Return JSON only:
 
 bullish = clear positive catalyst to buy (patent granted, partnership, contract win, FDA approval, upgrade, compliance regained, strong growth beat, acquisition, license deal)
 ignored = clear negative (offering, dilution, bankruptcy, delisting, probe, resignation, missed earnings, revenue down, default)
-neutral = routine filings, unclear impact, or not a trade catalyst
+neutral = routine filings, unclear impact, not a trade catalyst, OR headline too short / missing context to decide
+
+If the headline is only a ticker symbol or gives no real news text, return neutral with reason "insufficient headline".
+Do not return ignored unless the headline clearly describes negative news.
 
 Judge the headline only. Ignore company boilerplate about being an AI company unless the headline itself is the catalyst."""
 

@@ -9,7 +9,7 @@ import discord
 from discord.ext import commands
 
 from bot.news.analyzer import MessageAnalyzer, NewsItem
-from bot.news.symbols import extract_stock_symbol, split_news_blocks
+from bot.news.symbols import extract_nuntio_headline, extract_stock_symbol, split_news_blocks
 from bot.news.url_fetcher import UrlFetchError, extract_urls, fetch_article, is_allowed_url
 from bot.trading.engine import TradingEngine
 from bot.utils.config import Settings
@@ -145,6 +145,73 @@ class NewsTradingBot(commands.Bot):
         domains = self.settings.news.allowed_url_domains
         return [url for url in extract_urls(text) if is_allowed_url(url, domains)]
 
+    def _embed_headline_for_url(self, message: discord.Message, url: str) -> str:
+        """Use Discord embed title/description when the block text lacks a headline."""
+        if not url:
+            return ""
+
+        normalized_url = url.rstrip("/")
+        for embed in message.embeds:
+            embed_url = (embed.url or "").rstrip("/")
+            if embed_url and (embed_url == normalized_url or normalized_url in embed_url or embed_url in normalized_url):
+                for part in (embed.title, embed.description):
+                    if part and len(part.strip()) >= 12:
+                        return part.strip()
+
+        for embed in message.embeds:
+            blob = "\n".join(part for part in (embed.title, embed.description, embed.url) if part)
+            if normalized_url in blob:
+                for part in (embed.title, embed.description):
+                    if part and len(part.strip()) >= 12:
+                        return part.strip()
+        return ""
+
+    def _resolve_block_headline(
+        self,
+        block: str,
+        message: discord.Message | None,
+        url: str | None,
+    ) -> str:
+        headline = extract_nuntio_headline(block) or self.analyzer.extract_headline(block)
+        if message and url and (not headline or len(headline) < 12):
+            embed_headline = self._embed_headline_for_url(message, url)
+            if embed_headline:
+                headline = embed_headline
+        return headline
+
+    async def _analyze_block(
+        self,
+        block: str,
+        *,
+        source: str,
+        published: str,
+        message_id: str,
+        jump_url: str,
+        message: discord.Message | None = None,
+        url: str | None = None,
+        timing_key: str = "",
+    ) -> NewsItem | None:
+        symbol = extract_stock_symbol(block)
+        headline = self._resolve_block_headline(block, message, url)
+        item = await self.analyzer.analyze_text_async(
+            block,
+            source=source,
+            published=published,
+            message_id=message_id,
+            jump_url=jump_url,
+            headline=headline,
+            timing_key=timing_key,
+        )
+        if not item:
+            return None
+        if symbol:
+            item.stock_symbol = symbol
+        if url:
+            item.link = url
+        if headline and (not item.title or len(item.title) < 12):
+            item.title = headline[:300]
+        return item
+
     async def _process_item(self, item: NewsItem, timing_key: str = "") -> str | None:
         key = timing_key or item.link
         if key:
@@ -221,6 +288,7 @@ class NewsTradingBot(commands.Bot):
                     source=source,
                     message_id=dedupe_key,
                     message=message,
+                    block=block,
                     timing_key=url or dedupe_key,
                 )
                 if item:
@@ -232,19 +300,16 @@ class NewsTradingBot(commands.Bot):
 
             if not item:
                 timing_key = url or dedupe_key
-                item = await self.analyzer.analyze_text_async(
+                item = await self._analyze_block(
                     block,
                     source=source,
                     published=published,
                     message_id=str(message.id),
                     jump_url=message.jump_url,
+                    message=message,
+                    url=url,
                     timing_key=timing_key,
                 )
-                if item:
-                    if symbol:
-                        item.stock_symbol = symbol
-                    if url:
-                        item.link = url
 
             if not item:
                 continue
@@ -279,6 +344,7 @@ class NewsTradingBot(commands.Bot):
         message_id: str,
         *,
         message: discord.Message | None = None,
+        block: str = "",
         timing_key: str = "",
     ) -> NewsItem | None:
         key = timing_key or url
@@ -286,9 +352,23 @@ class NewsTradingBot(commands.Bot):
             title, body = await fetch_article(url)
             mark_step(key, "fetch")
         except UrlFetchError as exc:
-            logger.warning("URL fetch failed for %s: %s — trying Discord message fallback", url, exc)
+            logger.warning("URL fetch failed for %s: %s — using Discord block fallback", url, exc)
+            if message and block.strip():
+                published = message.created_at.strftime("%Y-%m-%d %H:%M UTC")
+                item = await self._analyze_block(
+                    block,
+                    source=source or "news URL",
+                    published=published,
+                    message_id=message_id,
+                    jump_url=message.jump_url,
+                    message=message,
+                    url=url,
+                    timing_key=key,
+                )
+                if item:
+                    return item
             if message:
-                source = source or "news URL"
+                published = message.created_at.strftime("%Y-%m-%d %H:%M UTC")
                 items = await self._message_to_items_async(message, source=source, timing_key=key)
                 for item in items:
                     symbol = item.stock_symbol or extract_stock_symbol(item.title)
@@ -299,7 +379,7 @@ class NewsTradingBot(commands.Bot):
             return None
 
         preview = title if title else body[:300]
-        return await self.analyzer.analyze_article_async(
+        item = await self.analyzer.analyze_article_async(
             preview,
             body,
             url=url,
@@ -307,6 +387,11 @@ class NewsTradingBot(commands.Bot):
             message_id=message_id,
             timing_key=key,
         )
+        if item and message and block.strip():
+            block_headline = self._resolve_block_headline(block, message, url)
+            if block_headline and len(block_headline) > len(item.title or ""):
+                item.title = block_headline[:300]
+        return item
 
     async def process_news_url(self, url: str, user: discord.User | discord.Member) -> NewsItem | None:
         if not is_allowed_url(url, self.settings.news.allowed_url_domains):
@@ -329,12 +414,16 @@ class NewsTradingBot(commands.Bot):
         items: list[NewsItem] = []
 
         for block in split_news_blocks(text):
-            item = await self.analyzer.analyze_text_async(
+            block_urls = self._extract_allowed_urls(block)
+            url = block_urls[0] if block_urls else None
+            item = await self._analyze_block(
                 block,
                 source=source,
                 published=published,
                 message_id=str(message.id),
                 jump_url=message.jump_url,
+                message=message,
+                url=url,
                 timing_key=timing_key,
             )
             if not item:

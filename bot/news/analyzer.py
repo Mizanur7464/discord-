@@ -6,11 +6,24 @@ import logging
 from dataclasses import dataclass
 
 from bot.news.ai_sentiment import AISentimentError, classify_headline
-from bot.news.symbols import extract_stock_symbol, is_nuntio_header_line
+from bot.news.symbols import extract_nuntio_headline, extract_stock_symbol, is_weak_headline
 from bot.utils.config import NewsConfig
 from bot.utils.timing import mark_step
 
 logger = logging.getLogger(__name__)
+
+INSUFFICIENT_INFO_MARKERS = (
+    "no information",
+    "insufficient",
+    "not enough",
+    "cannot determine",
+    "can't determine",
+    "unable to",
+    "unclear headline",
+    "empty headline",
+    "no headline",
+    "missing headline",
+)
 
 
 @dataclass
@@ -32,23 +45,19 @@ class MessageAnalyzer:
 
     @staticmethod
     def extract_headline(text: str) -> str:
-        """Return the news headline line, skipping NuntioBot ticker header rows."""
+        """Return the best headline from a NuntioBot block or plain news text."""
+        headline = extract_nuntio_headline(text)
+        if headline:
+            return headline
+
         lines = [line.strip() for line in text.strip().split("\n") if line.strip()]
-        if not lines:
-            return text.strip()
-
-        idx = 0
-        if is_nuntio_header_line(lines[0]):
-            idx = 1
-
-        while idx < len(lines):
-            line = lines[idx]
+        for line in lines:
             if line.startswith("http://") or line.startswith("https://"):
-                idx += 1
                 continue
-            return line
-
-        return lines[0]
+            cleaned = line.strip()
+            if len(cleaned) >= 12:
+                return cleaned
+        return ""
 
     async def _classify_with_ai(
         self,
@@ -63,6 +72,8 @@ class MessageAnalyzer:
             return "neutral", "AI: no API key"
         if not self.config.ai_sentiment_enabled:
             return "neutral", "AI: disabled"
+        if is_weak_headline(headline, symbol):
+            return "neutral", "AI: headline too short for classification"
 
         if timing_key:
             mark_step(timing_key, "ai")
@@ -74,6 +85,9 @@ class MessageAnalyzer:
                 symbol=symbol,
             )
             label = f"AI: {reason}"
+            reason_lower = reason.lower()
+            if sentiment == "ignored" and any(marker in reason_lower for marker in INSUFFICIENT_INFO_MARKERS):
+                return "neutral", f"AI: insufficient headline ({reason})"
             if sentiment == "neutral":
                 return "neutral", label
             return sentiment, label
