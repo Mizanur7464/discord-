@@ -134,6 +134,41 @@ class TradingEngine:
             return float(data.bid_price)
         raise ValueError(f"No quote available for {symbol}")
 
+    def _get_latest_trade_price(self, symbol: str) -> float | None:
+        from alpaca.data.requests import StockLatestTradeRequest
+
+        _, data_client = self._get_clients()
+        trade = data_client.get_stock_latest_trade(
+            StockLatestTradeRequest(symbol_or_symbols=symbol)
+        )
+        data = trade.get(symbol)
+        if data and data.price and data.price > 0:
+            return float(data.price)
+        return None
+
+    def _get_extended_buy_reference_price(self, symbol: str) -> float:
+        quote_price = self._get_last_price(symbol)
+        try:
+            trade_price = self._get_latest_trade_price(symbol)
+        except Exception as exc:
+            logger.warning("Latest trade lookup failed for %s: %s", symbol, exc)
+            return quote_price
+
+        if not trade_price:
+            return quote_price
+
+        max_below_pct = max(0, self.settings.trading.extended_quote_max_below_trade_percent) / 100
+        if quote_price < trade_price * (1 - max_below_pct):
+            logger.warning(
+                "Quote price for %s looks stale/low: quote $%.4f vs latest trade $%.4f; using latest trade",
+                symbol,
+                quote_price,
+                trade_price,
+            )
+            return trade_price
+
+        return quote_price
+
     def get_daily_volume_for_symbol(self, symbol: str) -> int | None:
         if not symbol:
             return None
@@ -516,7 +551,7 @@ class TradingEngine:
         from alpaca.trading.requests import LimitOrderRequest
 
         trading_client, _ = self._get_clients()
-        price = self._get_last_price(symbol)
+        price = self._get_extended_buy_reference_price(symbol) if extended_hours else self._get_last_price(symbol)
         limit_price = self._calc_buy_limit_price(price)
         qty = self._calc_qty(amount_usd, price)
 

@@ -48,6 +48,7 @@ class TradingConfig:
     low_volume_threshold: int = 1_000_000
     low_volume_trade_amount_usd: float = 25.0
     extended_limit_buffer_percent: float = 2.0
+    extended_quote_max_below_trade_percent: float = 10.0
     mosquito_volume_filter_enabled: bool = True
     mosquito_volume_min_value: float = 1_000_000
     mosquito_min_relative_volume: float = 2.0
@@ -170,6 +171,7 @@ def load_settings() -> Settings:
             low_volume_threshold=int(trading_raw.get("low_volume_threshold", 1_000_000)),
             low_volume_trade_amount_usd=float(trading_raw.get("low_volume_trade_amount_usd", 25)),
             extended_limit_buffer_percent=float(trading_raw.get("extended_limit_buffer_percent", 2.0)),
+            extended_quote_max_below_trade_percent=float(trading_raw.get("extended_quote_max_below_trade_percent", 10.0)),
             mosquito_volume_filter_enabled=trading_raw.get("mosquito_volume_filter_enabled", True),
             mosquito_volume_min_value=float(trading_raw.get("mosquito_volume_min_value", 1_000_000)),
             mosquito_min_relative_volume=float(trading_raw.get("mosquito_min_relative_volume", 2.0)),
