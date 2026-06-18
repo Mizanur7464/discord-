@@ -276,6 +276,42 @@ class TradingEngine:
         self._log_trade(result)
         return result
 
+    async def reset_paper_account(self) -> str:
+        """Cancel open orders and close paper positions. Balance reset is done in Alpaca UI."""
+        return await asyncio.to_thread(self._reset_paper_account_sync)
+
+    def _reset_paper_account_sync(self) -> str:
+        trading_client, _ = self._get_clients()
+        cancelled = 0
+        closed = 0
+
+        try:
+            orders = trading_client.get_orders()
+            for order in orders:
+                try:
+                    trading_client.cancel_order_by_id(order.id)
+                    cancelled += 1
+                except Exception as exc:
+                    logger.warning("Cancel order failed %s: %s", getattr(order, "id", "?"), exc)
+        except Exception as exc:
+            logger.warning("Fetch open orders failed during reset: %s", exc)
+
+        try:
+            positions = trading_client.get_all_positions()
+            for position in positions:
+                try:
+                    trading_client.close_position(position.symbol)
+                    closed += 1
+                except Exception as exc:
+                    logger.warning("Close position failed %s: %s", getattr(position, "symbol", "?"), exc)
+        except Exception as exc:
+            logger.warning("Fetch positions failed during reset: %s", exc)
+
+        return (
+            f"Paper cleanup requested — cancelled {cancelled} open order(s), "
+            f"closed {closed} position(s). Reset buying power from Alpaca UI if needed."
+        )
+
     def _cancel_open_orders(self, symbol: str) -> int:
         from alpaca.trading.enums import QueryOrderStatus
         from alpaca.trading.requests import GetOrdersRequest

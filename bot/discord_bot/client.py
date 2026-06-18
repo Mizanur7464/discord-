@@ -12,7 +12,8 @@ from bot.news.analyzer import MessageAnalyzer, NewsItem
 from bot.news.mosquito_vision import analyze_mosquito_image_urls
 from bot.news.symbols import extract_nuntio_headline, extract_stock_symbol, split_news_blocks
 from bot.news.url_fetcher import UrlFetchError, extract_urls, fetch_article, is_allowed_url
-from bot.news.volume_signal import VolumeSignalTracker
+from bot.news.volume_signal import VolumeSignal, VolumeSignalTracker
+from bot.news.watchlist import WatchEntry, WatchTrigger, WatchlistStore
 from bot.trading.engine import TradingEngine
 from bot.utils.config import Settings
 from bot.utils.timing import log_trade_speed, mark_news_if_absent, mark_step
@@ -43,8 +44,14 @@ class NewsTradingBot(commands.Bot):
             min_relative_volume=settings.trading.mosquito_min_relative_volume,
             confirm_seconds=settings.trading.mosquito_volume_confirm_minutes * 60,
         )
+        self.watchlist = WatchlistStore(
+            days=settings.trading.watchlist_days,
+            volume_increase_percent=settings.trading.watchlist_volume_increase_percent,
+            price_increase_percent=settings.trading.watchlist_price_increase_percent,
+        )
         self._monitoring = False
         self._alert_channel: discord.TextChannel | None = None
+        self._watchlist_channel: discord.TextChannel | None = None
         self._processed_messages: set[str] = set()
 
     def _is_news_author(self, message: discord.Message) -> bool:
@@ -90,6 +97,15 @@ class NewsTradingBot(commands.Bot):
             )
         else:
             logger.error("Alert channel not found. Check ALERT_CHANNEL_ID.")
+
+        if self.settings.watchlist_channel_id:
+            watchlist_channel = self.get_channel(self.settings.watchlist_channel_id)
+            if isinstance(watchlist_channel, discord.TextChannel):
+                self._watchlist_channel = watchlist_channel
+            else:
+                logger.warning("Watchlist channel not found. Falling back to alerts.")
+        else:
+            self._watchlist_channel = self._alert_channel
 
         if self.settings.bot.auto_start:
             self._monitoring = True
@@ -244,6 +260,32 @@ class NewsTradingBot(commands.Bot):
             and item.stock_symbol
         ):
             volume_signal = self.volume_tracker.get_recent(item.stock_symbol)
+            if self.settings.trading.watchlist_mode_enabled:
+                entry = self.watchlist.add_or_update(
+                    symbol=item.stock_symbol,
+                    title=item.title,
+                    ai_reason=item.ai_reason,
+                    source=item.source,
+                    link=item.link,
+                    baseline_signal=volume_signal,
+                )
+                item.sentiment = "neutral"
+                item.ai_reason = "AI: bullish news added to watchlist"
+                trade_msg = (
+                    f"Watchlist — waiting for mosquito breakout "
+                    f"({self.settings.trading.watchlist_volume_increase_percent:g}% volume "
+                    f"or {self.settings.trading.watchlist_price_increase_percent:g}% price)"
+                )
+                await self._send_watchlist_update(entry, trade_msg)
+                if item.stock_symbol:
+                    item.daily_volume = await asyncio.to_thread(
+                        self.trading_engine.get_daily_volume_for_symbol,
+                        item.stock_symbol,
+                    )
+                if key:
+                    log_trade_speed(key, symbol=item.stock_symbol, action="watchlist")
+                return trade_msg
+
             if not volume_signal:
                 item.sentiment = "neutral"
                 item.ai_reason = "AI: waiting for mosquito volume confirmation"
@@ -293,6 +335,44 @@ class NewsTradingBot(commands.Bot):
 
         return trade_msg
 
+    async def _send_watchlist_update(self, entry: WatchEntry, note: str) -> None:
+        channel = self._watchlist_channel or self._alert_channel
+        if not channel:
+            return
+        await channel.send(
+            f"👀 **Watchlist** `{entry.symbol}` — {note}\n"
+            f"News: {entry.title[:220]}\n"
+            f"AI: {entry.ai_reason}"
+        )
+
+    async def _process_watchlist_triggers(self, signals: list[VolumeSignal]) -> None:
+        for signal in signals:
+            trigger = self.watchlist.check_signal(signal)
+            if not trigger:
+                continue
+            await self._execute_watchlist_trigger(trigger)
+
+    async def _execute_watchlist_trigger(self, trigger: WatchTrigger) -> None:
+        entry = trigger.entry
+        msg = (
+            f"Watchlist trigger — {trigger.reason}; "
+            f"mosquito {trigger.signal.label}"
+        )
+        trade_result = await self.trading_engine.process_signal(
+            "bullish",
+            symbol=entry.symbol,
+            text=entry.title,
+        )
+        trade_msg = trade_result.message if trade_result else "No trade result"
+        channel = self._watchlist_channel or self._alert_channel
+        if channel:
+            await channel.send(
+                f"🚀 **Watchlist Trigger** `{entry.symbol}`\n"
+                f"{msg}\n"
+                f"Trade: {trade_msg}"
+            )
+        logger.info("Watchlist trigger %s — %s — %s", entry.symbol, msg, trade_msg)
+
     async def _process_news_message(self, message: discord.Message, *, source: str) -> int:
         """Process every ticker block in a message (URL fetch + Discord text)."""
         text = self._collect_message_text(message)
@@ -314,6 +394,7 @@ class NewsTradingBot(commands.Bot):
             if volume_signals:
                 symbols = ", ".join(signal.label for signal in volume_signals[:8])
                 logger.info("Mosquito volume signal stored: %s", symbols)
+                await self._process_watchlist_triggers(volume_signals)
                 return 0
 
         published = message.created_at.strftime("%Y-%m-%d %H:%M UTC")
@@ -551,6 +632,7 @@ class BotCommands(commands.Cog):
             ("/start", "Start news monitoring"),
             ("/stop", "Stop news monitoring"),
             ("/check", "Scan recent messages from news channels"),
+            ("/paper_reset", "Cancel paper orders and close positions"),
         ]
         for name, desc in commands_list:
             embed.add_field(name=name, value=desc, inline=False)
@@ -624,6 +706,12 @@ class BotCommands(commands.Cog):
             return
 
         await interaction.followup.send(f"✅ Processed {found} message(s)!")
+
+    @discord.app_commands.command(name="paper_reset", description="Cancel open paper orders and close positions")
+    async def paper_reset_cmd(self, interaction: discord.Interaction) -> None:
+        await interaction.response.defer()
+        msg = await self.bot.trading_engine.reset_paper_account()
+        await interaction.followup.send(msg)
 
     @discord.app_commands.command(name="news", description="Fetch a news URL and auto-trade")
     @discord.app_commands.describe(url="News link (e.g. nuntiobot.com)")

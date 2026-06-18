@@ -52,6 +52,10 @@ class TradingConfig:
     mosquito_volume_min_value: float = 1_000_000
     mosquito_min_relative_volume: float = 2.0
     mosquito_volume_confirm_minutes: int = 60
+    watchlist_mode_enabled: bool = True
+    watchlist_days: int = 3
+    watchlist_volume_increase_percent: float = 20.0
+    watchlist_price_increase_percent: float = 3.0
 
 
 @dataclass
@@ -79,6 +83,7 @@ class Settings:
     forwarder: ForwardConfig
     discord_token: str
     alert_channel_id: int
+    watchlist_channel_id: int
     alpaca_api_key: str
     alpaca_secret_key: str
     alpaca_paper: bool
@@ -100,6 +105,7 @@ def load_settings() -> Settings:
     token = os.getenv("DISCORD_BOT_TOKEN", "").strip()
     source_channels = os.getenv("NEWS_SOURCE_CHANNEL_IDS", "").strip()
     alert_channel = os.getenv("ALERT_CHANNEL_ID", "").strip()
+    watchlist_channel = os.getenv("WATCHLIST_CHANNEL_ID", "").strip()
     user_token = os.getenv("DISCORD_USER_TOKEN", "").strip()
     user_email = os.getenv("DISCORD_USER_EMAIL", "").strip()
     user_password = os.getenv("DISCORD_USER_PASSWORD", "").strip()
@@ -168,6 +174,10 @@ def load_settings() -> Settings:
             mosquito_volume_min_value=float(trading_raw.get("mosquito_volume_min_value", 1_000_000)),
             mosquito_min_relative_volume=float(trading_raw.get("mosquito_min_relative_volume", 2.0)),
             mosquito_volume_confirm_minutes=int(trading_raw.get("mosquito_volume_confirm_minutes", 60)),
+            watchlist_mode_enabled=trading_raw.get("watchlist_mode_enabled", True),
+            watchlist_days=int(trading_raw.get("watchlist_days", 3)),
+            watchlist_volume_increase_percent=float(trading_raw.get("watchlist_volume_increase_percent", 20)),
+            watchlist_price_increase_percent=float(trading_raw.get("watchlist_price_increase_percent", 3)),
         ),
         forwarder=ForwardConfig(
             enabled=forwarder_raw.get("enabled", True),
@@ -180,6 +190,7 @@ def load_settings() -> Settings:
         ),
         discord_token=token,
         alert_channel_id=int(alert_channel),
+        watchlist_channel_id=int(watchlist_channel) if watchlist_channel else 0,
         alpaca_api_key=os.getenv("ALPACA_API_KEY", "").strip(),
         alpaca_secret_key=os.getenv("ALPACA_SECRET_KEY", "").strip(),
         alpaca_paper=os.getenv("ALPACA_PAPER", "true").strip().lower() == "true",
