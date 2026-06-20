@@ -9,6 +9,9 @@ from pathlib import Path
 import yaml
 from dotenv import load_dotenv
 
+from bot.trading.exit_manager import ExitTier
+from bot.trading.scanner_profiles import ScannerProfile, load_profiles_from_config
+
 ROOT_DIR = Path(__file__).resolve().parents[2]
 CONFIG_PATH = ROOT_DIR / "config" / "settings.yaml"
 ENV_PATH = ROOT_DIR / ".env"
@@ -57,6 +60,38 @@ class TradingConfig:
     watchlist_days: int = 3
     watchlist_volume_increase_percent: float = 20.0
     watchlist_price_increase_percent: float = 3.0
+    semi_automated_mode: bool = True
+    auto_trade_on_signal: bool = False
+    scanner_min_alert_score: int = 50
+    scanner_min_rvol: float = 2.0
+    scanner_min_daily_volume: int = 500_000
+    scanner_min_turnover_usd: float = 1_000_000.0
+    scanner_min_price: float = 0.5
+    scanner_max_price: float = 20.0
+    runner_big_move_percent: float = 50.0
+    runner_retention_days: int = 30
+    scanner_profiles: dict[str, ScannerProfile] | None = None
+    intraday_bar_limit: int = 120
+    pullback_entry_percent: float = 3.0
+    pullback_max_chase_percent: float = 2.0
+    pullback_limit_buffer_percent: float = 0.5
+    pullback_lookback_bars: int = 30
+    use_pullback_limit_orders: bool = True
+    exit_manager_enabled: bool = True
+    exit_tiers: list[ExitTier] | None = None
+    trailing_stop_percent: float = 5.0
+    runner_hold_percent: float = 15.0
+    realtime_scanner_enabled: bool = True
+    realtime_scan_interval_seconds: int = 30
+    realtime_scan_alert_cooldown_seconds: int = 300
+    benzinga_enabled: bool = True
+    microstructure_enabled: bool = True
+    data_provider: str = "alpaca"
+    moomoo_host: str = "127.0.0.1"
+    moomoo_port: int = 11111
+    ibkr_host: str = "127.0.0.1"
+    ibkr_port: int = 7497
+    ibkr_client_id: int = 1
 
 
 @dataclass
@@ -88,6 +123,28 @@ class Settings:
     alpaca_api_key: str
     alpaca_secret_key: str
     alpaca_paper: bool
+    benzinga_api_key: str = ""
+    finnhub_api_key: str = ""
+
+
+def _parse_exit_tiers(raw: list | None) -> list[ExitTier]:
+    defaults = [
+        ExitTier(profit_percent=10, sell_percent=30),
+        ExitTier(profit_percent=20, sell_percent=30),
+        ExitTier(profit_percent=30, sell_percent=25),
+    ]
+    if not raw:
+        return defaults
+    tiers: list[ExitTier] = []
+    for item in raw:
+        if isinstance(item, dict):
+            tiers.append(
+                ExitTier(
+                    profit_percent=float(item.get("profit_percent", 10)),
+                    sell_percent=float(item.get("sell_percent", 25)),
+                )
+            )
+    return tiers or defaults
 
 
 def _parse_channel_ids(raw: str) -> list[int]:
@@ -180,6 +237,40 @@ def load_settings() -> Settings:
             watchlist_days=int(trading_raw.get("watchlist_days", 3)),
             watchlist_volume_increase_percent=float(trading_raw.get("watchlist_volume_increase_percent", 20)),
             watchlist_price_increase_percent=float(trading_raw.get("watchlist_price_increase_percent", 3)),
+            semi_automated_mode=trading_raw.get("semi_automated_mode", True),
+            auto_trade_on_signal=trading_raw.get("auto_trade_on_signal", False),
+            scanner_min_alert_score=int(trading_raw.get("scanner_min_alert_score", 50)),
+            scanner_min_rvol=float(trading_raw.get("scanner_min_rvol", 2.0)),
+            scanner_min_daily_volume=int(trading_raw.get("scanner_min_daily_volume", 500_000)),
+            scanner_min_turnover_usd=float(trading_raw.get("scanner_min_turnover_usd", 1_000_000)),
+            scanner_min_price=float(trading_raw.get("scanner_min_price", 0.5)),
+            scanner_max_price=float(trading_raw.get("scanner_max_price", 20.0)),
+            runner_big_move_percent=float(trading_raw.get("runner_big_move_percent", 50.0)),
+            runner_retention_days=int(trading_raw.get("runner_retention_days", 30)),
+            scanner_profiles=load_profiles_from_config(trading_raw.get("scanner_profiles")),
+            intraday_bar_limit=int(trading_raw.get("intraday_bar_limit", 120)),
+            pullback_entry_percent=float(trading_raw.get("pullback_entry_percent", 3.0)),
+            pullback_max_chase_percent=float(trading_raw.get("pullback_max_chase_percent", 2.0)),
+            pullback_limit_buffer_percent=float(trading_raw.get("pullback_limit_buffer_percent", 0.5)),
+            pullback_lookback_bars=int(trading_raw.get("pullback_lookback_bars", 30)),
+            use_pullback_limit_orders=trading_raw.get("use_pullback_limit_orders", True),
+            exit_manager_enabled=trading_raw.get("exit_manager_enabled", True),
+            exit_tiers=_parse_exit_tiers(trading_raw.get("exit_tiers")),
+            trailing_stop_percent=float(trading_raw.get("trailing_stop_percent", 5.0)),
+            runner_hold_percent=float(trading_raw.get("runner_hold_percent", 15.0)),
+            realtime_scanner_enabled=trading_raw.get("realtime_scanner_enabled", True),
+            realtime_scan_interval_seconds=int(trading_raw.get("realtime_scan_interval_seconds", 30)),
+            realtime_scan_alert_cooldown_seconds=int(
+                trading_raw.get("realtime_scan_alert_cooldown_seconds", 300)
+            ),
+            benzinga_enabled=trading_raw.get("benzinga_enabled", True),
+            microstructure_enabled=trading_raw.get("microstructure_enabled", True),
+            data_provider=str(trading_raw.get("data_provider", "alpaca")),
+            moomoo_host=str(trading_raw.get("moomoo_host", "127.0.0.1")),
+            moomoo_port=int(trading_raw.get("moomoo_port", 11111)),
+            ibkr_host=str(trading_raw.get("ibkr_host", "127.0.0.1")),
+            ibkr_port=int(trading_raw.get("ibkr_port", 7497)),
+            ibkr_client_id=int(trading_raw.get("ibkr_client_id", 1)),
         ),
         forwarder=ForwardConfig(
             enabled=forwarder_raw.get("enabled", True),
@@ -196,4 +287,6 @@ def load_settings() -> Settings:
         alpaca_api_key=os.getenv("ALPACA_API_KEY", "").strip(),
         alpaca_secret_key=os.getenv("ALPACA_SECRET_KEY", "").strip(),
         alpaca_paper=os.getenv("ALPACA_PAPER", "true").strip().lower() == "true",
+        benzinga_api_key=os.getenv("BENZINGA_API_KEY", "").strip(),
+        finnhub_api_key=os.getenv("FINNHUB_API_KEY", "").strip(),
     )

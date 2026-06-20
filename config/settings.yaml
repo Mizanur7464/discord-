@@ -49,6 +49,72 @@ trading:
   watchlist_days: 3                       # keep AI-filtered symbols for this many days
   watchlist_volume_increase_percent: 20   # enter when mosquito volume rises this much from baseline
   watchlist_price_increase_percent: 3     # enter when mosquito price rises this much from baseline
+  semi_automated_mode: true               # scanner + alerts first; manual confirm before trade
+  auto_trade_on_signal: false             # set true only if you want old fully-auto buy behavior
+  scanner_min_alert_score: 50             # minimum score to flag as actionable alert
+  scanner_min_rvol: 2.0                   # relative volume vs 30-day average
+  scanner_min_daily_volume: 500000
+  scanner_min_turnover_usd: 1000000         # price * daily volume proxy
+  scanner_min_price: 0.5
+  scanner_max_price: 20.0
+  runner_big_move_percent: 50             # star repeat runners after big single-day moves
+  runner_retention_days: 30
+  intraday_bar_limit: 120                # 1-minute bars for multi-timeframe + pullback
+  pullback_entry_percent: 3              # target pullback below recent high
+  pullback_max_chase_percent: 2          # within this % of high = chasing
+  pullback_limit_buffer_percent: 0.5
+  pullback_lookback_bars: 30
+  use_pullback_limit_orders: true       # /buy uses pullback limit instead of market
+  scanner_profiles:
+    premarket:
+      min_price: 0.5
+      max_price: 15.0
+      min_rvol: 1.5
+      min_gap_pct: 3.0
+      min_session_change_pct: 2.0
+      min_turnover_usd: 500000
+      min_daily_volume: 300000
+      min_alert_score: 45
+    regular:
+      min_price: 0.5
+      max_price: 20.0
+      min_rvol: 2.0
+      min_gap_pct: 5.0
+      min_session_change_pct: 3.0
+      min_turnover_usd: 1000000
+      min_daily_volume: 500000
+      min_alert_score: 50
+    afterhours:
+      min_price: 0.5
+      max_price: 15.0
+      min_rvol: 1.8
+      min_gap_pct: 0.0
+      min_session_change_pct: 1.0
+      min_turnover_usd: 750000
+      min_daily_volume: 400000
+      min_alert_score: 48
+
+  exit_manager_enabled: true
+  exit_tiers:
+    - profit_percent: 10
+      sell_percent: 30
+    - profit_percent: 20
+      sell_percent: 30
+    - profit_percent: 30
+      sell_percent: 25
+  trailing_stop_percent: 5
+  runner_hold_percent: 15
+  realtime_scanner_enabled: true
+  realtime_scan_interval_seconds: 30
+  realtime_scan_alert_cooldown_seconds: 300
+  benzinga_enabled: true
+  microstructure_enabled: true
+  data_provider: alpaca
+  moomoo_host: 127.0.0.1
+  moomoo_port: 11111
+  ibkr_host: 127.0.0.1
+  ibkr_port: 7497
+  ibkr_client_id: 1
 
 forwarder:
   enabled: true

@@ -11,6 +11,7 @@ from datetime import date
 from pathlib import Path
 
 from bot.news.symbols import extract_stock_symbol
+from bot.trading.exit_manager import ExitManager, ExitTier
 from bot.trading.schedule import is_regular_market_hours, trading_block_reason
 from bot.trading.volume import get_daily_volume
 from bot.utils.config import Settings
@@ -28,6 +29,7 @@ class TradeResult:
     symbol: str
     amount: float
     price: float | None = None
+    qty: float | None = None
     paper: bool = True
     daily_volume: int | None = None
 
@@ -41,6 +43,21 @@ class TradingEngine:
         self._last_trade_date = date.today()
         self._symbols_today: set[str] = set()
         TRADES_FILE.parent.mkdir(parents=True, exist_ok=True)
+        cfg = settings.trading
+        tiers = cfg.exit_tiers or [
+            ExitTier(10, 30),
+            ExitTier(20, 30),
+            ExitTier(30, 25),
+        ]
+        self.exit_manager = ExitManager(
+            tiers=tiers,
+            trailing_stop_percent=cfg.trailing_stop_percent,
+            runner_hold_percent=cfg.runner_hold_percent,
+            enabled=cfg.exit_manager_enabled,
+            round_price=self._round_price,
+            get_clients=self._get_clients,
+            get_last_price=self._get_last_price,
+        )
 
     def _reset_daily_count(self) -> None:
         today = date.today()
@@ -252,8 +269,44 @@ class TradingEngine:
         if sentiment == "ignored":
             return await self.handle_bad_news(symbol=symbol, text=text)
         if sentiment == "bullish":
+            if not self._auto_trade_enabled():
+                return None
             return await self.execute(sentiment, symbol=symbol, text=text)
         return None
+
+    def _auto_trade_enabled(self) -> bool:
+        cfg = self.settings.trading
+        if not cfg.enabled:
+            return False
+        if cfg.semi_automated_mode and not cfg.auto_trade_on_signal:
+            return False
+        return True
+
+    async def manual_buy(
+        self,
+        symbol: str,
+        text: str = "",
+        *,
+        limit_price: float | None = None,
+    ) -> TradeResult:
+        """Place a buy after manual confirmation."""
+        if not self.settings.trading.enabled:
+            return TradeResult(
+                success=False,
+                message="Trading is disabled in settings.",
+                side="none",
+                symbol=symbol or "N/A",
+                amount=0,
+            )
+        return await asyncio.to_thread(self._execute_sync, symbol, text, limit_price)
+
+    async def check_exits(self) -> list[str]:
+        """Evaluate tiered exits and trailing stops for open positions."""
+        return await asyncio.to_thread(self._check_exits_sync)
+
+    def _check_exits_sync(self) -> list[str]:
+        actions = self.exit_manager.evaluate_all()
+        return self.exit_manager.execute_actions(actions)
 
     async def handle_bad_news(self, *, symbol: str = "", text: str = "") -> TradeResult | None:
         if not self.settings.trading.enabled:
@@ -313,6 +366,8 @@ class TradingEngine:
 
     async def reset_paper_account(self) -> str:
         """Cancel open orders and close paper positions. Balance reset is done in Alpaca UI."""
+        if not self.settings.alpaca_paper:
+            return "Paper reset blocked — ALPACA_PAPER is false (live account)."
         return await asyncio.to_thread(self._reset_paper_account_sync)
 
     def _reset_paper_account_sync(self) -> str:
@@ -373,9 +428,14 @@ class TradingEngine:
         if sentiment != "bullish":
             return None
 
-        return await asyncio.to_thread(self._execute_sync, symbol, text)
+        return await asyncio.to_thread(self._execute_sync, symbol, text, None)
 
-    def _execute_sync(self, symbol: str, text: str) -> TradeResult | None:
+    def _execute_sync(
+        self,
+        symbol: str,
+        text: str,
+        limit_price: float | None = None,
+    ) -> TradeResult | None:
         self._reset_daily_count()
 
         block = self._is_trading_allowed()
@@ -445,8 +505,23 @@ class TradingEngine:
                 daily_volume=vol,
             )
 
+        use_pullback_limit = (
+            limit_price is not None
+            and limit_price > 0
+            and cfg.use_pullback_limit_orders
+        )
+
         try:
-            if is_regular_market_hours():
+            if use_pullback_limit:
+                result = self._place_limit_buy(
+                    stock,
+                    amount_usd,
+                    paper,
+                    volume_note=volume_note,
+                    extended_hours=not is_regular_market_hours(),
+                    explicit_limit=limit_price,
+                )
+            elif is_regular_market_hours():
                 result = self._place_bracket_buy(stock, amount_usd, paper, volume_note=volume_note)
             else:
                 result = self._place_limit_buy(
@@ -459,7 +534,16 @@ class TradingEngine:
         except Exception as exc:
             logger.error("Buy failed for %s: %s — trying fallback order", stock, exc)
             try:
-                if is_regular_market_hours():
+                if use_pullback_limit:
+                    result = self._place_limit_buy(
+                        stock,
+                        amount_usd,
+                        paper,
+                        volume_note=volume_note,
+                        extended_hours=not is_regular_market_hours(),
+                        explicit_limit=limit_price,
+                    )
+                elif is_regular_market_hours():
                     result = self._place_market_buy(
                         stock,
                         amount_usd,
@@ -487,6 +571,8 @@ class TradingEngine:
         if result.success:
             self._trades_today += 1
             self._symbols_today.add(stock)
+            if result.qty and result.price:
+                self.exit_manager.register_fill(stock, result.qty, result.price)
 
         result.daily_volume = daily_volume
         self._log_trade(result)
@@ -535,6 +621,7 @@ class TradingEngine:
             symbol=symbol,
             amount=amount_usd,
             price=price,
+            qty=qty,
             paper=paper,
         )
 
@@ -546,14 +633,15 @@ class TradingEngine:
         *,
         volume_note: str = "",
         extended_hours: bool = False,
+        explicit_limit: float | None = None,
     ) -> TradeResult:
         from alpaca.trading.enums import OrderSide, TimeInForce
         from alpaca.trading.requests import LimitOrderRequest
 
         trading_client, _ = self._get_clients()
         price = self._get_extended_buy_reference_price(symbol) if extended_hours else self._get_last_price(symbol)
-        limit_price = self._calc_buy_limit_price(price)
-        qty = self._calc_qty(amount_usd, price)
+        limit_price = explicit_limit if explicit_limit and explicit_limit > 0 else self._calc_buy_limit_price(price)
+        qty = self._calc_qty(amount_usd, price if price > 0 else limit_price)
 
         order_data = LimitOrderRequest(
             symbol=symbol,
@@ -567,16 +655,18 @@ class TradingEngine:
 
         mode = "PAPER" if paper else "LIVE"
         session = " extended" if extended_hours else ""
+        entry_type = "pullback limit" if explicit_limit else "limit"
         return TradeResult(
             success=True,
             message=(
                 f"[{mode}] BUY {symbol} x{qty} ~${amount_usd:.2f}{volume_note} | "
-                f"{session} limit ${limit_price} order {order.id}"
+                f"{session} {entry_type} ${limit_price} order {order.id}"
             ),
             side="buy",
             symbol=symbol,
             amount=amount_usd,
             price=price,
+            qty=qty,
             paper=paper,
         )
 
@@ -617,6 +707,7 @@ class TradingEngine:
             symbol=symbol,
             amount=amount_usd,
             price=price,
+            qty=qty,
             paper=paper,
         )
 
@@ -624,14 +715,32 @@ class TradingEngine:
         mode = "PAPER (test)" if self.settings.alpaca_paper else "LIVE (real money!)"
         trading = "enabled" if self.settings.trading.enabled else "disabled"
         cfg = self.settings.trading
+        trade_mode = (
+            "semi-automated (scanner + manual /buy)"
+            if cfg.semi_automated_mode and not cfg.auto_trade_on_signal
+            else "fully automatic"
+            if self._auto_trade_enabled()
+            else "alerts only"
+        )
         return (
             f"**Trading Status**\n"
             f"Broker: Alpaca\n"
             f"Mode: {mode}\n"
+            f"Trade flow: {trade_mode}\n"
             f"Auto trade: {trading}\n"
             f"Per trade: ${cfg.trade_amount_usd:.2f}\n"
             f"Take profit: {cfg.take_profit_percent}%\n"
             f"Stop loss: {cfg.stop_loss_percent}%\n"
+            f"Scanner min score: {cfg.scanner_min_alert_score}\n"
+            f"Pullback limit orders: {'on' if cfg.use_pullback_limit_orders else 'off'}\n"
+            f"Exit manager: {'on' if cfg.exit_manager_enabled else 'off'} "
+            f"({len(cfg.exit_tiers or [])} tiers + {cfg.trailing_stop_percent:g}% trail)\n"
+            f"Realtime scanner: {'on' if cfg.realtime_scanner_enabled else 'off'} "
+            f"({cfg.realtime_scan_interval_seconds}s)\n"
+            f"Benzinga catalyst: {'on' if cfg.benzinga_enabled else 'off'}\n"
+            f"Microstructure: {'on' if cfg.microstructure_enabled else 'off'}\n"
+            f"Data provider: {cfg.data_provider}\n"
+            f"Scanner profiles: premarket / regular / afterhours\n"
             f"Trades today: {self._trades_today}/{cfg.max_trades_per_day}\n"
             f"One buy per symbol/day: {'yes' if cfg.one_trade_per_symbol_per_day else 'no'}\n"
             f"Cancel on bad news: {'yes' if cfg.cancel_orders_on_bad_news else 'no'}\n"
