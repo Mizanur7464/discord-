@@ -121,7 +121,7 @@ trading:
   realtime_scan_interval_seconds: 30
   realtime_scan_alert_cooldown_seconds: 300
   benzinga_enabled: true
-  microstructure_enabled: true
+  microstructure_enabled: false
   data_provider: alpaca
   moomoo_host: 127.0.0.1
   moomoo_port: 11111
@@ -133,8 +133,8 @@ trading:
   universe_movers_top: 50
   realtime_max_symbols_per_cycle: 100
   realtime_batch_rotation: true         # rotate through full 2k watchlist in batches
-  unusual_whales_enabled: true
-  tradingview_enabled: true
+  unusual_whales_enabled: false
+  tradingview_enabled: false
   tradingview_exchange: NASDAQ
   tradingview_interval: 5m
 
