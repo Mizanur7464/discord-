@@ -61,6 +61,7 @@ class TradingConfig:
     watchlist_mode_enabled: bool = True
     watchlist_days: int = 3
     watchlist_volume_increase_percent: float = 20.0
+    watchlist_price_increase_percent: float = 3.0
     watchlist_max_entries: int = 2000
     historical_watchlist_max_entries: int = 2000
     historical_watchlist_retention_days: int = 90
