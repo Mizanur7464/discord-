@@ -19,6 +19,7 @@ from bot.trading.engine import TradingEngine
 from bot.trading.realtime_scanner import RealtimeScanner
 from bot.trading.runner_history import RunnerHistoryStore
 from bot.trading.scanner import ScanResult, SymbolScanner
+from bot.trading.universe_scanner import fetch_universe_symbols
 from bot.utils.config import Settings
 from bot.utils.timing import log_trade_speed, mark_news_if_absent, mark_step
 
@@ -77,6 +78,7 @@ class NewsTradingBot(commands.Bot):
             data_provider=self.data_provider,
             benzinga_api_key=settings.benzinga_api_key,
             finnhub_api_key=settings.finnhub_api_key,
+            unusual_whales_api_key=settings.unusual_whales_api_key,
         )
         self.realtime_scanner: RealtimeScanner | None = None
         if settings.trading.realtime_scanner_enabled:
@@ -87,6 +89,10 @@ class NewsTradingBot(commands.Bot):
                 scan_fn=self._scan_symbol_sync,
                 collect_symbols_fn=self._collect_scan_symbols,
                 send_alert_fn=self._send_realtime_alert,
+                universe_symbols_fn=self._fetch_universe_symbols
+                if settings.trading.universe_scanner_enabled
+                else None,
+                max_symbols_per_cycle=settings.trading.realtime_max_symbols_per_cycle,
             )
         self._monitoring = False
         self._background_tasks: list[asyncio.Task] = []
@@ -190,6 +196,18 @@ class NewsTradingBot(commands.Bot):
             if runner.symbol not in symbols:
                 symbols.append(runner.symbol)
         return symbols
+
+    def _fetch_universe_symbols(self) -> list[str]:
+        cfg = self.settings.trading
+        universe = fetch_universe_symbols(
+            self.settings.alpaca_api_key,
+            self.settings.alpaca_secret_key,
+            most_actives_top=cfg.universe_most_actives_top,
+            movers_top=cfg.universe_movers_top,
+            min_price=cfg.scanner_min_price,
+            max_price=cfg.scanner_max_price,
+        )
+        return universe.symbols
 
     async def _send_realtime_alert(self, scan: ScanResult) -> None:
         channel = self._watchlist_channel or self._alert_channel
@@ -835,7 +853,8 @@ class BotCommands(commands.Cog):
             ("/help", "Show this help message"),
             ("/news <url>", "Fetch a news link and run scanner"),
             ("/scan <symbol>", "Run scanner on a symbol"),
-            ("/marketscan", "Run realtime scanner once on watchlist"),
+            ("/marketscan", "Run realtime + universe scanner once"),
+            ("/universe", "Show broad market universe symbols"),
             ("/buy <symbol>", "Manually confirm and place a buy"),
             ("/exits", "Show tiered exit / trailing stop status"),
             ("/status", "Bot and trading status"),
@@ -933,6 +952,17 @@ class BotCommands(commands.Cog):
             await interaction.followup.send(f"Scanner failed for `{symbol}`: {exc}")
             return
         await interaction.followup.send(self.bot._format_scan_action(scan))
+
+    @discord.app_commands.command(name="universe", description="Show broad market universe from Alpaca screener")
+    async def universe_cmd(self, interaction: discord.Interaction) -> None:
+        await interaction.response.defer()
+        symbols = await asyncio.to_thread(self.bot._fetch_universe_symbols)
+        if not symbols:
+            await interaction.followup.send("No universe symbols returned (check Alpaca keys).")
+            return
+        preview = ", ".join(symbols[:40])
+        extra = f" … +{len(symbols) - 40} more" if len(symbols) > 40 else ""
+        await interaction.followup.send(f"🌐 **Universe** ({len(symbols)} symbols)\n{preview}{extra}")
 
     @discord.app_commands.command(name="marketscan", description="Run realtime scanner once on watchlist symbols")
     async def marketscan_cmd(self, interaction: discord.Interaction) -> None:

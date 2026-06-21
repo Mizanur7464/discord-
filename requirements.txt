@@ -5,3 +5,6 @@ aiohttp>=3.9.0
 alpaca-py>=0.39.0
 discum>=1.4.1
 playwright>=1.40.0
+tradingview-ta>=3.3.0
+futu-api>=9.1.0
+ib_insync>=0.9.86

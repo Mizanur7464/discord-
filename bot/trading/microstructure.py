@@ -17,7 +17,10 @@ class MicrostructureSnapshot:
     tape_bias: str = "neutral"
     bid: float | None = None
     ask: float | None = None
+    bid_size: float | None = None
+    ask_size: float | None = None
     spread_pct: float | None = None
+    book_imbalance: float | None = None
     short_interest_pct: float | None = None
     notes: list[str] = field(default_factory=list)
 
@@ -26,6 +29,8 @@ class MicrostructureSnapshot:
         parts = [f"tape {self.tape_bias}"]
         if self.spread_pct is not None:
             parts.append(f"spread {self.spread_pct:.2f}%")
+        if self.book_imbalance is not None:
+            parts.append(f"L2 imbalance {self.book_imbalance:+.0f}%")
         if self.short_interest_pct is not None:
             parts.append(f"short {self.short_interest_pct:.1f}%")
         return " | ".join(parts)
@@ -116,8 +121,16 @@ def analyze_microstructure(
         )[symbol]
         snap.bid = float(quote.bid_price) if quote.bid_price else None
         snap.ask = float(quote.ask_price) if quote.ask_price else None
+        snap.bid_size = float(quote.bid_size) if getattr(quote, "bid_size", None) else None
+        snap.ask_size = float(quote.ask_size) if getattr(quote, "ask_size", None) else None
         snap.spread_pct, spread_notes = analyze_quote_spread(snap.bid, snap.ask)
         snap.notes.extend(spread_notes)
+        if snap.bid_size and snap.ask_size and (snap.bid_size + snap.ask_size) > 0:
+            snap.book_imbalance = (snap.bid_size - snap.ask_size) / (snap.bid_size + snap.ask_size) * 100
+            if snap.book_imbalance >= 20:
+                snap.notes.append("Level 2 bid-side imbalance")
+            elif snap.book_imbalance <= -20:
+                snap.notes.append("Level 2 ask-side pressure")
     except Exception as exc:
         logger.warning("Quote lookup failed for %s: %s", symbol, exc)
 
@@ -169,6 +182,12 @@ def score_microstructure(snap: MicrostructureSnapshot | None) -> tuple[int, list
     if snap.short_interest_pct is not None and snap.short_interest_pct >= 15:
         score += 4
         reasons.append(f"short interest {snap.short_interest_pct:.1f}%")
+    if snap.book_imbalance is not None and snap.book_imbalance >= 15:
+        score += 4
+        reasons.append(f"L2 bid imbalance {snap.book_imbalance:.0f}%")
+    elif snap.book_imbalance is not None and snap.book_imbalance <= -15:
+        score -= 3
+        warnings.append(f"L2 ask pressure {snap.book_imbalance:.0f}%")
     for note in snap.notes[:2]:
         if note not in reasons and note not in warnings:
             reasons.append(note)

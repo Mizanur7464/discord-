@@ -6,6 +6,7 @@ import logging
 from dataclasses import dataclass, field
 
 from bot.news.benzinga import CatalystResult, fetch_catalyst_sync, score_catalyst
+from bot.news.unusual_whales import WhaleSnapshot, fetch_symbol_flow, score_whale_flow
 from bot.news.volume_signal import VolumeSignal
 from bot.trading.data_providers import MarketDataProvider
 from bot.trading.indicators import IndicatorSnapshot
@@ -15,6 +16,7 @@ from bot.trading.pullback import PullbackSetup, analyze_pullback
 from bot.trading.runner_history import RunnerHistoryStore
 from bot.trading.scanner_profiles import ScannerProfile, get_active_profile
 from bot.trading.timeframes import MultiTimeframeAnalysis, analyze_multi_timeframe
+from bot.trading.tradingview_signals import TradingViewSnapshot, fetch_tradingview_analysis, score_tradingview
 from bot.trading.volume import get_daily_volume
 from bot.utils.config import TradingConfig
 
@@ -46,6 +48,8 @@ class ScanResult:
     suggested_limit_price: float | None = None
     catalyst: CatalystResult | None = None
     microstructure: MicrostructureSnapshot | None = None
+    whale_flow: WhaleSnapshot | None = None
+    tradingview: TradingViewSnapshot | None = None
     data_provider_name: str = "alpaca"
     reasons: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
@@ -75,6 +79,10 @@ class ScanResult:
             parts.append(f"catalyst: {', '.join(self.catalyst.keywords[:3])}")
         if self.microstructure:
             parts.append(self.microstructure.summary)
+        if self.whale_flow and self.whale_flow.alerts:
+            parts.append(f"whale: {self.whale_flow.summary}")
+        if self.tradingview:
+            parts.append(f"TV {self.tradingview.summary}")
         return " | ".join(parts)
 
 
@@ -90,6 +98,7 @@ class SymbolScanner:
         data_provider: MarketDataProvider | None = None,
         benzinga_api_key: str = "",
         finnhub_api_key: str = "",
+        unusual_whales_api_key: str = "",
     ):
         self.cfg = trading_config
         self.runner_history = runner_history
@@ -99,6 +108,7 @@ class SymbolScanner:
         self._data_provider = data_provider
         self._benzinga_api_key = benzinga_api_key
         self._finnhub_api_key = finnhub_api_key
+        self._unusual_whales_api_key = unusual_whales_api_key
 
     def scan(
         self,
@@ -188,6 +198,16 @@ class SymbolScanner:
                 )
             except Exception as exc:
                 result.warnings.append(f"microstructure unavailable: {exc}")
+
+        if self.cfg.unusual_whales_enabled and self._unusual_whales_api_key:
+            result.whale_flow = fetch_symbol_flow(self._unusual_whales_api_key, symbol)
+
+        if self.cfg.tradingview_enabled:
+            result.tradingview = fetch_tradingview_analysis(
+                symbol,
+                exchange=self.cfg.tradingview_exchange,
+                interval=self.cfg.tradingview_interval,
+            )
 
         if result.float_shares and result.price:
             result.market_cap_usd = result.float_shares * result.price
@@ -358,6 +378,18 @@ class SymbolScanner:
             score += ms_score
             result.reasons.extend(ms_reasons)
             result.warnings.extend(ms_warnings)
+
+        if result.whale_flow:
+            uw_score, uw_reasons, uw_warnings = score_whale_flow(result.whale_flow)
+            score += uw_score
+            result.reasons.extend(uw_reasons)
+            result.warnings.extend(uw_warnings)
+
+        if result.tradingview:
+            tv_score, tv_reasons, tv_warnings = score_tradingview(result.tradingview)
+            score += tv_score
+            result.reasons.extend(tv_reasons)
+            result.warnings.extend(tv_warnings)
 
         result.score = max(0, min(100, score))
         result.grade = self._grade(result.score)

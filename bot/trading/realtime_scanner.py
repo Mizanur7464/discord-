@@ -1,4 +1,4 @@
-"""Background scanner that refreshes watchlist symbols on an interval."""
+"""Background scanner that refreshes watchlist + broad market universe."""
 
 from __future__ import annotations
 
@@ -19,15 +19,21 @@ class RealtimeScanner:
         scan_fn,
         collect_symbols_fn,
         send_alert_fn,
+        universe_symbols_fn=None,
+        max_symbols_per_cycle: int = 50,
     ):
         self.interval_seconds = max(10, interval_seconds)
         self.min_score = min_score
         self.alert_cooldown_seconds = alert_cooldown_seconds
+        self.max_symbols_per_cycle = max_symbols_per_cycle
         self._scan_fn = scan_fn
         self._collect_symbols_fn = collect_symbols_fn
+        self._universe_symbols_fn = universe_symbols_fn
         self._send_alert_fn = send_alert_fn
         self._recent_alerts: dict[str, float] = {}
         self._running = False
+        self._universe_cache: list[str] = []
+        self._universe_cache_at: float = 0.0
 
     async def run_loop(self) -> None:
         self._running = True
@@ -42,13 +48,34 @@ class RealtimeScanner:
     def stop(self) -> None:
         self._running = False
 
+    def _get_universe_symbols(self) -> list[str]:
+        if not self._universe_symbols_fn:
+            return []
+        now = time.time()
+        if now - self._universe_cache_at > 300:
+            try:
+                self._universe_cache = self._universe_symbols_fn()
+                self._universe_cache_at = now
+            except Exception as exc:
+                logger.warning("Universe refresh failed: %s", exc)
+        return self._universe_cache
+
+    def _merged_symbols(self) -> list[str]:
+        symbols: list[str] = []
+        for source in (self._collect_symbols_fn(), self._get_universe_symbols()):
+            for symbol in source:
+                sym = symbol.upper()
+                if sym not in symbols:
+                    symbols.append(sym)
+        return symbols[: self.max_symbols_per_cycle]
+
     async def _scan_once(self) -> int:
-        symbols = self._collect_symbols_fn()
+        symbols = self._merged_symbols()
         if not symbols:
             return 0
         sent = 0
         now = time.time()
-        for symbol in symbols[:25]:
+        for symbol in symbols:
             if now - self._recent_alerts.get(symbol, 0) < self.alert_cooldown_seconds:
                 continue
             scan = await asyncio.to_thread(self._scan_fn, symbol)
@@ -63,7 +90,7 @@ class RealtimeScanner:
 
     async def scan_now(self) -> list:
         results = []
-        for symbol in self._collect_symbols_fn()[:25]:
+        for symbol in self._merged_symbols():
             scan = await asyncio.to_thread(self._scan_fn, symbol)
             results.append(scan)
         return results

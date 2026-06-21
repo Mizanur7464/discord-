@@ -92,6 +92,14 @@ class TradingConfig:
     ibkr_host: str = "127.0.0.1"
     ibkr_port: int = 7497
     ibkr_client_id: int = 1
+    universe_scanner_enabled: bool = True
+    universe_most_actives_top: int = 100
+    universe_movers_top: int = 50
+    realtime_max_symbols_per_cycle: int = 50
+    unusual_whales_enabled: bool = True
+    tradingview_enabled: bool = True
+    tradingview_exchange: str = "NASDAQ"
+    tradingview_interval: str = "5m"
 
 
 @dataclass
@@ -125,6 +133,7 @@ class Settings:
     alpaca_paper: bool
     benzinga_api_key: str = ""
     finnhub_api_key: str = ""
+    unusual_whales_api_key: str = ""
 
 
 def _parse_exit_tiers(raw: list | None) -> list[ExitTier]:
@@ -271,6 +280,14 @@ def load_settings() -> Settings:
             ibkr_host=str(trading_raw.get("ibkr_host", "127.0.0.1")),
             ibkr_port=int(trading_raw.get("ibkr_port", 7497)),
             ibkr_client_id=int(trading_raw.get("ibkr_client_id", 1)),
+            universe_scanner_enabled=trading_raw.get("universe_scanner_enabled", True),
+            universe_most_actives_top=int(trading_raw.get("universe_most_actives_top", 100)),
+            universe_movers_top=int(trading_raw.get("universe_movers_top", 50)),
+            realtime_max_symbols_per_cycle=int(trading_raw.get("realtime_max_symbols_per_cycle", 50)),
+            unusual_whales_enabled=trading_raw.get("unusual_whales_enabled", True),
+            tradingview_enabled=trading_raw.get("tradingview_enabled", True),
+            tradingview_exchange=str(trading_raw.get("tradingview_exchange", "NASDAQ")),
+            tradingview_interval=str(trading_raw.get("tradingview_interval", "5m")),
         ),
         forwarder=ForwardConfig(
             enabled=forwarder_raw.get("enabled", True),
@@ -289,4 +306,5 @@ def load_settings() -> Settings:
         alpaca_paper=os.getenv("ALPACA_PAPER", "true").strip().lower() == "true",
         benzinga_api_key=os.getenv("BENZINGA_API_KEY", "").strip(),
         finnhub_api_key=os.getenv("FINNHUB_API_KEY", "").strip(),
+        unusual_whales_api_key=os.getenv("UNUSUAL_WHALES_API_KEY", "").strip(),
     )

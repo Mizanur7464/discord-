@@ -115,6 +115,14 @@ trading:
   ibkr_host: 127.0.0.1
   ibkr_port: 7497
   ibkr_client_id: 1
+  universe_scanner_enabled: true
+  universe_most_actives_top: 100
+  universe_movers_top: 50
+  realtime_max_symbols_per_cycle: 50
+  unusual_whales_enabled: true
+  tradingview_enabled: true
+  tradingview_exchange: NASDAQ
+  tradingview_interval: 5m
 
 forwarder:
   enabled: true
