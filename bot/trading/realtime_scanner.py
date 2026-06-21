@@ -20,12 +20,14 @@ class RealtimeScanner:
         collect_symbols_fn,
         send_alert_fn,
         universe_symbols_fn=None,
-        max_symbols_per_cycle: int = 50,
+        max_symbols_per_cycle: int = 100,
+        batch_rotation: bool = True,
     ):
         self.interval_seconds = max(10, interval_seconds)
         self.min_score = min_score
         self.alert_cooldown_seconds = alert_cooldown_seconds
         self.max_symbols_per_cycle = max_symbols_per_cycle
+        self.batch_rotation = batch_rotation
         self._scan_fn = scan_fn
         self._collect_symbols_fn = collect_symbols_fn
         self._universe_symbols_fn = universe_symbols_fn
@@ -34,6 +36,7 @@ class RealtimeScanner:
         self._running = False
         self._universe_cache: list[str] = []
         self._universe_cache_at: float = 0.0
+        self._batch_offset: int = 0
 
     async def run_loop(self) -> None:
         self._running = True
@@ -67,7 +70,20 @@ class RealtimeScanner:
                 sym = symbol.upper()
                 if sym not in symbols:
                     symbols.append(sym)
-        return symbols[: self.max_symbols_per_cycle]
+
+        if not symbols:
+            return []
+
+        if not self.batch_rotation or len(symbols) <= self.max_symbols_per_cycle:
+            return symbols[: self.max_symbols_per_cycle]
+
+        end = self._batch_offset + self.max_symbols_per_cycle
+        if end <= len(symbols):
+            batch = symbols[self._batch_offset:end]
+        else:
+            batch = symbols[self._batch_offset:] + symbols[: end - len(symbols)]
+        self._batch_offset = (self._batch_offset + self.max_symbols_per_cycle) % len(symbols)
+        return batch
 
     async def _scan_once(self) -> int:
         symbols = self._merged_symbols()

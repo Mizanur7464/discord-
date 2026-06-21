@@ -30,6 +30,8 @@ trading:
   max_trades_per_day: 15
   one_trade_per_symbol_per_day: true
   cancel_orders_on_bad_news: true
+  sell_position_on_bad_news: true       # market-sell open position on bad news (news abort)
+  remove_watchlist_on_bad_news: true  # drop symbol from AI + historical watchlists
   block_saturday: true
   block_sunday: true
   block_monday_premarket: false
@@ -49,6 +51,15 @@ trading:
   watchlist_days: 3                       # keep AI-filtered symbols for this many days
   watchlist_volume_increase_percent: 20   # enter when mosquito volume rises this much from baseline
   watchlist_price_increase_percent: 3     # enter when mosquito price rises this much from baseline
+  watchlist_max_entries: 2000             # max AI-news watchlist symbols
+  historical_watchlist_max_entries: 2000  # repeat low-cap runner history cap
+  historical_watchlist_retention_days: 90
+  ai_exit_enabled: true                   # AI decides hold vs grid sell using volume context
+  ai_exit_min_profit_percent: -5          # run AI exit when profit drops below this %
+  grid_exit_flexible: true                # volume shifts grid tiers up/down
+  grid_rvol_strong: 3.0                   # strong volume → hold for higher grid level
+  grid_rvol_weak: 1.5                     # weak volume → sell at lower grid level
+  grid_tier_adjust_percent: 10            # max % shift per grid tier
   semi_automated_mode: true               # scanner + alerts first; manual confirm before trade
   auto_trade_on_signal: false             # set true only if you want old fully-auto buy behavior
   scanner_min_alert_score: 50             # minimum score to flag as actionable alert
@@ -95,13 +106,15 @@ trading:
       min_alert_score: 48
 
   exit_manager_enabled: true
-  exit_tiers:
-    - profit_percent: 10
-      sell_percent: 30
-    - profit_percent: 20
-      sell_percent: 30
-    - profit_percent: 30
+  exit_tiers:                           # flexible profit grid — AI + volume can shift levels
+    - profit_percent: 8
       sell_percent: 25
+    - profit_percent: 15
+      sell_percent: 30
+    - profit_percent: 25
+      sell_percent: 25
+    - profit_percent: 40
+      sell_percent: 20
   trailing_stop_percent: 5
   runner_hold_percent: 15
   realtime_scanner_enabled: true
@@ -118,7 +131,8 @@ trading:
   universe_scanner_enabled: true
   universe_most_actives_top: 100
   universe_movers_top: 50
-  realtime_max_symbols_per_cycle: 50
+  realtime_max_symbols_per_cycle: 100
+  realtime_batch_rotation: true         # rotate through full 2k watchlist in batches
   unusual_whales_enabled: true
   tradingview_enabled: true
   tradingview_exchange: NASDAQ

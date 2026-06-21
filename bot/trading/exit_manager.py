@@ -25,6 +25,7 @@ class PositionExitState:
     original_qty: float
     remaining_qty: float
     tiers_hit: list[int] = field(default_factory=list)
+    tiers_deferred: list[int] = field(default_factory=list)
     highest_price: float = 0.0
     trailing_stop_price: float | None = None
     runner_qty: float = 0.0
@@ -77,7 +78,31 @@ class ExitManager:
         self._save()
         logger.info("Exit plan registered for %s qty=%s entry=$%.4f", symbol, qty, entry_price)
 
-    def evaluate(self, symbol: str) -> list[ExitAction]:
+    def clear(self, symbol: str) -> None:
+        symbol = symbol.upper()
+        if symbol in self._states:
+            self._states.pop(symbol, None)
+            self._save()
+
+    def active_symbols(self) -> list[str]:
+        return [symbol for symbol, state in self._states.items() if state.remaining_qty > 0]
+
+    def get_state(self, symbol: str) -> PositionExitState | None:
+        return self._states.get(symbol.upper())
+
+    def defer_tier(self, symbol: str, tier_idx: int) -> None:
+        state = self._states.get(symbol.upper())
+        if not state or tier_idx in state.tiers_deferred:
+            return
+        state.tiers_deferred.append(tier_idx)
+        self._save()
+
+    def evaluate(
+        self,
+        symbol: str,
+        *,
+        tier_thresholds: dict[int, float] | None = None,
+    ) -> list[ExitAction]:
         if not self.enabled:
             return []
         state = self._states.get(symbol.upper())
@@ -100,9 +125,10 @@ class ExitManager:
         actions: list[ExitAction] = []
 
         for idx, tier in enumerate(self.tiers):
-            if idx in state.tiers_hit:
+            if idx in state.tiers_hit or idx in state.tiers_deferred:
                 continue
-            if profit_pct < tier.profit_percent:
+            trigger = tier_thresholds.get(idx, tier.profit_percent) if tier_thresholds else tier.profit_percent
+            if profit_pct < trigger:
                 continue
             sell_qty = state.original_qty * tier.sell_percent / 100
             sell_qty = min(sell_qty, state.remaining_qty - state.runner_qty)
@@ -113,7 +139,7 @@ class ExitManager:
                 ExitAction(
                     symbol=state.symbol,
                     qty=round(sell_qty, 4),
-                    reason=f"tier +{tier.profit_percent:g}% → sell {tier.sell_percent:g}%",
+                    reason=f"grid +{trigger:g}% → sell {tier.sell_percent:g}%",
                     profit_percent=profit_pct,
                 )
             )
@@ -137,8 +163,25 @@ class ExitManager:
             self._save()
         return actions
 
-    def evaluate_all(self) -> list[ExitAction]:
-        return [action for symbol in list(self._states) for action in self.evaluate(symbol)]
+    def evaluate_all(self, tier_thresholds_by_symbol: dict[str, dict[int, float]] | None = None) -> list[ExitAction]:
+        thresholds = tier_thresholds_by_symbol or {}
+        return [
+            action
+            for symbol in list(self._states)
+            for action in self.evaluate(symbol, tier_thresholds=thresholds.get(symbol.upper()))
+        ]
+
+    def next_tier_profit(self, symbol: str, tier_thresholds: dict[int, float] | None = None) -> float | None:
+        state = self._states.get(symbol.upper())
+        if not state:
+            return None
+        for idx, tier in enumerate(self.tiers):
+            if idx in state.tiers_hit or idx in state.tiers_deferred:
+                continue
+            if tier_thresholds and idx in tier_thresholds:
+                return tier_thresholds[idx]
+            return tier.profit_percent
+        return None
 
     def execute_actions(self, actions: list[ExitAction]) -> list[str]:
         if not actions:
@@ -185,7 +228,8 @@ class ExitManager:
                 f"`{state.symbol}` entry ${state.entry_price:.2f} | "
                 f"remaining {state.remaining_qty:g}/{state.original_qty:g} | "
                 f"high ${state.highest_price:.2f} | trail {trail} | "
-                f"tiers hit {len(state.tiers_hit)}/{len(self.tiers)}"
+                f"tiers hit {len(state.tiers_hit)}/{len(self.tiers)} | "
+                f"deferred {len(state.tiers_deferred)}"
             )
         return lines or ["No active exit plans."]
 
@@ -195,7 +239,7 @@ class ExitManager:
         try:
             raw = json.loads(EXIT_STATE_FILE.read_text(encoding="utf-8"))
             self._states = {
-                symbol.upper(): PositionExitState(**data)
+                symbol.upper(): PositionExitState(**{**data, "tiers_deferred": data.get("tiers_deferred", [])})
                 for symbol, data in raw.items()
                 if isinstance(data, dict)
             }

@@ -16,6 +16,7 @@ from bot.news.volume_signal import VolumeSignal, VolumeSignalTracker
 from bot.news.watchlist import WatchEntry, WatchTrigger, WatchlistStore
 from bot.trading.data_providers import build_data_provider
 from bot.trading.engine import TradingEngine
+from bot.trading.historical_watchlist import HistoricalWatchlistStore
 from bot.trading.realtime_scanner import RealtimeScanner
 from bot.trading.runner_history import RunnerHistoryStore
 from bot.trading.scanner import ScanResult, SymbolScanner
@@ -53,6 +54,11 @@ class NewsTradingBot(commands.Bot):
             days=settings.trading.watchlist_days,
             volume_increase_percent=settings.trading.watchlist_volume_increase_percent,
             price_increase_percent=settings.trading.watchlist_price_increase_percent,
+            max_entries=settings.trading.watchlist_max_entries,
+        )
+        self.historical_watchlist = HistoricalWatchlistStore(
+            max_entries=settings.trading.historical_watchlist_max_entries,
+            retention_days=settings.trading.historical_watchlist_retention_days,
         )
         self.runner_history = RunnerHistoryStore(
             big_move_percent=settings.trading.runner_big_move_percent,
@@ -93,6 +99,7 @@ class NewsTradingBot(commands.Bot):
                 if settings.trading.universe_scanner_enabled
                 else None,
                 max_symbols_per_cycle=settings.trading.realtime_max_symbols_per_cycle,
+                batch_rotation=settings.trading.realtime_batch_rotation,
             )
         self._monitoring = False
         self._background_tasks: list[asyncio.Task] = []
@@ -171,11 +178,13 @@ class NewsTradingBot(commands.Bot):
 
     async def _exit_monitor_loop(self) -> None:
         cfg = self.settings.trading
-        if not cfg.exit_manager_enabled:
+        if not cfg.exit_manager_enabled and not cfg.ai_exit_enabled:
             return
         while True:
             try:
-                messages = await self.trading_engine.check_exits()
+                messages: list[str] = []
+                if cfg.exit_manager_enabled or cfg.ai_exit_enabled:
+                    messages.extend(await self.trading_engine.check_grid_exits())
                 if messages and self._alert_channel:
                     body = "\n".join(messages[:8])
                     await self._alert_channel.send(f"📤 **Exit actions**\n{body}")
@@ -192,10 +201,24 @@ class NewsTradingBot(commands.Bot):
         for entry in self.watchlist.active_entries():
             if entry.symbol not in symbols:
                 symbols.append(entry.symbol)
-        for runner in self.runner_history.active_runners()[:15]:
+        for runner in self.runner_history.active_runners()[:50]:
             if runner.symbol not in symbols:
                 symbols.append(runner.symbol)
-        return symbols
+                self.historical_watchlist.add(runner.symbol, source="runner", note=runner.notes)
+        for symbol in self.historical_watchlist.symbols():
+            if symbol not in symbols:
+                symbols.append(symbol)
+        return symbols[: self.settings.trading.historical_watchlist_max_entries]
+
+    def _track_historical_symbol(self, symbol: str, *, source: str, note: str = "") -> None:
+        if symbol:
+            self.historical_watchlist.add(symbol, source=source, note=note)
+
+    def _abort_symbol_on_bad_news(self, symbol: str) -> None:
+        if not symbol or not self.settings.trading.remove_watchlist_on_bad_news:
+            return
+        self.watchlist.remove(symbol)
+        self.historical_watchlist.remove(symbol)
 
     def _fetch_universe_symbols(self) -> list[str]:
         cfg = self.settings.trading
@@ -419,6 +442,11 @@ class NewsTradingBot(commands.Bot):
                     link=item.link,
                     baseline_signal=volume_signal,
                 )
+                self._track_historical_symbol(
+                    item.stock_symbol,
+                    source="ai-news",
+                    note=item.ai_reason,
+                )
                 item.sentiment = "neutral"
                 item.ai_reason = "AI: bullish news added to watchlist"
                 trade_msg = (
@@ -451,14 +479,18 @@ class NewsTradingBot(commands.Bot):
             return trade_msg
 
         if item.sentiment == "ignored":
+            if item.stock_symbol:
+                self._abort_symbol_on_bad_news(item.stock_symbol)
             trade_result = await self.trading_engine.process_signal(
                 item.sentiment,
                 symbol=item.stock_symbol,
                 text=item.title,
             )
             trade_msg = trade_result.message if trade_result else None
+            if trade_msg and item.stock_symbol and self.settings.trading.sell_position_on_bad_news:
+                trade_msg = f"News abort — {trade_msg}"
             if key:
-                log_trade_speed(key, symbol=item.stock_symbol, action="ignored")
+                log_trade_speed(key, symbol=item.stock_symbol, action="abort")
             return trade_msg
 
         if (
@@ -475,6 +507,11 @@ class NewsTradingBot(commands.Bot):
                     source=item.source,
                     link=item.link,
                     baseline_signal=volume_signal,
+                )
+                self._track_historical_symbol(
+                    item.stock_symbol,
+                    source="ai-news",
+                    note=item.ai_reason,
                 )
                 item.sentiment = "neutral"
                 item.ai_reason = "AI: bullish news added to watchlist"
@@ -827,7 +864,7 @@ class NewsTradingBot(commands.Bot):
         embed.add_field(name="Published", value=item.published, inline=False)
 
         if item.sentiment == "ignored":
-            action = trade_msg or "No trade — ignored signal"
+            action = trade_msg or "No trade — news abort (orders cancelled, position sold if open)"
             embed.add_field(name="Action", value=action, inline=False)
         elif item.sentiment == "neutral":
             action = trade_msg or f"No trade — {item.ai_reason or 'AI: no catalyst'}"
@@ -855,6 +892,7 @@ class BotCommands(commands.Cog):
             ("/scan <symbol>", "Run scanner on a symbol"),
             ("/marketscan", "Run realtime + universe scanner once"),
             ("/universe", "Show broad market universe symbols"),
+            ("/watchlist", "Show AI + historical watchlist stats"),
             ("/buy <symbol>", "Manually confirm and place a buy"),
             ("/exits", "Show tiered exit / trailing stop status"),
             ("/status", "Bot and trading status"),
@@ -963,6 +1001,22 @@ class BotCommands(commands.Cog):
         preview = ", ".join(symbols[:40])
         extra = f" … +{len(symbols) - 40} more" if len(symbols) > 40 else ""
         await interaction.followup.send(f"🌐 **Universe** ({len(symbols)} symbols)\n{preview}{extra}")
+
+    @discord.app_commands.command(name="watchlist", description="Show AI news + historical watchlist status")
+    async def watchlist_cmd(self, interaction: discord.Interaction) -> None:
+        ai_entries = self.bot.watchlist.active_entries()
+        hist_count = self.bot.historical_watchlist.count()
+        hist_max = self.bot.settings.trading.historical_watchlist_max_entries
+        ai_preview = ", ".join(entry.symbol for entry in ai_entries[:25])
+        hist_preview = ", ".join(self.bot.historical_watchlist.symbols()[:25])
+        extra_ai = f" … +{len(ai_entries) - 25} more" if len(ai_entries) > 25 else ""
+        extra_hist = f" … +{hist_count - 25} more" if hist_count > 25 else ""
+        await interaction.response.send_message(
+            f"👀 **AI Watchlist** ({len(ai_entries)}/{self.bot.settings.trading.watchlist_max_entries})\n"
+            f"{ai_preview or 'empty'}{extra_ai}\n\n"
+            f"📊 **Historical runners** ({hist_count}/{hist_max})\n"
+            f"{hist_preview or 'empty'}{extra_hist}"
+        )
 
     @discord.app_commands.command(name="marketscan", description="Run realtime scanner once on watchlist symbols")
     async def marketscan_cmd(self, interaction: discord.Interaction) -> None:

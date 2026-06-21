@@ -11,7 +11,7 @@ from datetime import date
 from pathlib import Path
 
 from bot.news.symbols import extract_stock_symbol
-from bot.trading.exit_manager import ExitManager, ExitTier
+from bot.trading.exit_manager import ExitAction, ExitManager, ExitTier
 from bot.trading.schedule import is_regular_market_hours, trading_block_reason
 from bot.trading.volume import get_daily_volume
 from bot.utils.config import Settings
@@ -301,8 +301,111 @@ class TradingEngine:
         return await asyncio.to_thread(self._execute_sync, symbol, text, limit_price)
 
     async def check_exits(self) -> list[str]:
-        """Evaluate tiered exits and trailing stops for open positions."""
-        return await asyncio.to_thread(self._check_exits_sync)
+        """Evaluate flexible grid exits with volume context + optional AI hold/sell."""
+        return await self.check_grid_exits()
+
+    async def check_grid_exits(self) -> list[str]:
+        cfg = self.settings.trading
+        if not cfg.exit_manager_enabled:
+            return []
+
+        symbols = self.exit_manager.active_symbols()
+        if not symbols:
+            return []
+
+        from bot.trading.grid_exit import build_adjusted_tiers, fetch_volume_context
+
+        tier_thresholds_by_symbol: dict[str, dict[int, float]] = {}
+        ai_actions: list[ExitAction] = []
+
+        for symbol in symbols:
+            state = self.exit_manager.get_state(symbol)
+            if not state or state.remaining_qty <= 0:
+                continue
+
+            try:
+                _, data_client = await asyncio.to_thread(self._get_clients)
+                volume_ctx = await asyncio.to_thread(fetch_volume_context, data_client, symbol)
+                price = await asyncio.to_thread(self._get_last_price, symbol)
+            except Exception:
+                continue
+
+            profit_pct = (price / state.entry_price - 1) * 100
+            tiers = self.exit_manager.tiers
+            adjusted = build_adjusted_tiers(
+                tiers,
+                volume_ctx,
+                rvol_strong=cfg.grid_rvol_strong,
+                rvol_weak=cfg.grid_rvol_weak,
+                adjust_percent=cfg.grid_tier_adjust_percent if cfg.grid_exit_flexible else 0.0,
+            )
+            thresholds = {idx: level for idx, _tier, level in adjusted}
+            tier_thresholds_by_symbol[symbol.upper()] = thresholds
+
+            if not cfg.ai_exit_enabled or not self.settings.news.openai_api_key:
+                continue
+            if profit_pct < cfg.ai_exit_min_profit_percent:
+                continue
+
+            from bot.trading.ai_exit import advise_exit
+
+            next_tier = self.exit_manager.next_tier_profit(symbol, thresholds)
+            action, sell_percent, reason = await advise_exit(
+                symbol=symbol,
+                entry_price=state.entry_price,
+                current_price=price,
+                profit_percent=profit_pct,
+                volume=volume_ctx,
+                tiers_hit=len(state.tiers_hit),
+                total_tiers=len(tiers),
+                next_tier_profit=next_tier,
+                trailing_stop=state.trailing_stop_price,
+                api_key=self.settings.news.openai_api_key,
+                model=self.settings.news.openai_model,
+            )
+
+            if action == "defer_tier":
+                for idx, _tier, level in adjusted:
+                    if idx in state.tiers_hit or idx in state.tiers_deferred:
+                        continue
+                    if profit_pct >= level:
+                        await asyncio.to_thread(self.exit_manager.defer_tier, symbol, idx)
+                        logger.info("Grid defer %s tier %s — %s", symbol, idx, reason)
+                        break
+                continue
+
+            if action == "hold":
+                continue
+
+            sell_qty = state.remaining_qty if action == "sell_all" else state.remaining_qty * sell_percent / 100
+            sell_qty = min(sell_qty, state.remaining_qty)
+            if sell_qty <= 0:
+                continue
+            ai_actions.append(
+                ExitAction(
+                    symbol=symbol,
+                    qty=round(sell_qty, 4),
+                    reason=f"AI grid: {reason}",
+                    profit_percent=profit_pct,
+                )
+            )
+
+        messages: list[str] = []
+        if ai_actions:
+            messages.extend(await asyncio.to_thread(self.exit_manager.execute_actions, ai_actions))
+
+        grid_actions = await asyncio.to_thread(
+            self.exit_manager.evaluate_all,
+            tier_thresholds_by_symbol,
+        )
+        if grid_actions:
+            messages.extend(await asyncio.to_thread(self.exit_manager.execute_actions, grid_actions))
+
+        return messages
+
+    async def check_ai_exits(self) -> list[str]:
+        """Backward-compatible alias."""
+        return await self.check_grid_exits()
 
     def _check_exits_sync(self) -> list[str]:
         actions = self.exit_manager.evaluate_all()
@@ -341,9 +444,18 @@ class TradingEngine:
 
         try:
             count = await asyncio.to_thread(self._cancel_open_orders, stock)
-            msg = f"Bad news on {stock} — cancelled {count} open order(s)."
+            parts = [f"Bad news on {stock} — cancelled {count} open order(s)."]
             if count == 0:
-                msg = f"Bad news on {stock} — no open orders to cancel."
+                parts = [f"Bad news on {stock} — no open orders to cancel."]
+
+            if self.settings.trading.sell_position_on_bad_news:
+                sold, sell_msg = await asyncio.to_thread(self._sell_position_sync, stock)
+                if sold:
+                    parts.append(sell_msg)
+                elif "no open position" not in sell_msg:
+                    parts.append(f"Position sell failed: {sell_msg}")
+
+            msg = " ".join(parts)
         except Exception as exc:
             return TradeResult(
                 success=False,
@@ -356,13 +468,46 @@ class TradingEngine:
         result = TradeResult(
             success=True,
             message=msg,
-            side="cancel",
+            side="abort",
             symbol=stock,
             amount=0,
             paper=self.settings.alpaca_paper,
         )
         self._log_trade(result)
         return result
+
+    def _sell_position_sync(self, symbol: str) -> tuple[bool, str]:
+        from alpaca.trading.enums import OrderSide, TimeInForce
+        from alpaca.trading.requests import MarketOrderRequest
+
+        trading_client, _ = self._get_clients()
+        symbol = symbol.upper()
+        try:
+            positions = trading_client.get_all_positions()
+        except Exception as exc:
+            return False, str(exc)
+
+        position = next((p for p in positions if p.symbol.upper() == symbol), None)
+        if not position:
+            return False, "no open position"
+
+        qty = abs(float(position.qty))
+        if qty <= 0:
+            return False, "no open position"
+
+        try:
+            order = trading_client.submit_order(
+                MarketOrderRequest(
+                    symbol=symbol,
+                    qty=qty,
+                    side=OrderSide.SELL,
+                    time_in_force=TimeInForce.DAY,
+                )
+            )
+            self.exit_manager.clear(symbol)
+            return True, f"news abort — sold {qty:g} shares (order {order.id})"
+        except Exception as exc:
+            return False, str(exc)
 
     async def reset_paper_account(self) -> str:
         """Cancel open orders and close paper positions. Balance reset is done in Alpaca UI."""
@@ -747,6 +892,10 @@ class TradingEngine:
             f"Trades today: {self._trades_today}/{cfg.max_trades_per_day}\n"
             f"One buy per symbol/day: {'yes' if cfg.one_trade_per_symbol_per_day else 'no'}\n"
             f"Cancel on bad news: {'yes' if cfg.cancel_orders_on_bad_news else 'no'}\n"
+            f"Sell position on bad news: {'yes' if cfg.sell_position_on_bad_news else 'no'}\n"
+            f"Flexible grid exit: {'on' if cfg.grid_exit_flexible else 'off'}\n"
+            f"AI grid exit: {'on' if cfg.ai_exit_enabled else 'off'}\n"
+            f"Historical watchlist cap: {cfg.historical_watchlist_max_entries}\n"
             f"Trading hours: "
             f"{'regular only (9:30 AM–4 PM ET)' if cfg.regular_market_hours_only else 'extended (Mon–Fri 4 AM–8 PM ET)'}\n"
             f"Volume filter: {'on' if cfg.volume_filter_enabled else 'off'} "

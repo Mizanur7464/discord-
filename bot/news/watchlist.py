@@ -42,8 +42,10 @@ class WatchlistStore:
         days: int,
         volume_increase_percent: float,
         price_increase_percent: float,
+        max_entries: int = 2000,
     ):
         self.days = days
+        self.max_entries = max(50, max_entries)
         self.volume_multiplier = 1 + max(0, volume_increase_percent) / 100
         self.price_multiplier = 1 + max(0, price_increase_percent) / 100
         WATCHLIST_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -86,8 +88,17 @@ class WatchlistStore:
             self._apply_baseline(entry, baseline_signal)
 
         self._entries[symbol] = entry
+        self._enforce_cap()
         self._save()
         return entry
+
+    def remove(self, symbol: str) -> bool:
+        symbol = symbol.upper()
+        if symbol not in self._entries:
+            return False
+        self._entries.pop(symbol, None)
+        self._save()
+        return True
 
     def check_signal(self, signal: VolumeSignal) -> WatchTrigger | None:
         self._trim()
@@ -131,6 +142,13 @@ class WatchlistStore:
         entry.last_volume = signal.value or entry.last_volume
         entry.last_price = signal.price or entry.last_price
 
+    def _enforce_cap(self) -> None:
+        if len(self._entries) <= self.max_entries:
+            return
+        ranked = sorted(self._entries.values(), key=lambda item: item.added_at)
+        for entry in ranked[: len(self._entries) - self.max_entries]:
+            self._entries.pop(entry.symbol, None)
+
     def _trim(self) -> None:
         now = time.time()
         expired = [symbol for symbol, entry in self._entries.items() if entry.expires_at < now]
@@ -138,6 +156,7 @@ class WatchlistStore:
             self._entries.pop(symbol, None)
         if expired:
             self._save()
+        self._enforce_cap()
 
     def _load(self) -> None:
         if not WATCHLIST_FILE.exists():

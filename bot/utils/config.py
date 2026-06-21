@@ -41,6 +41,8 @@ class TradingConfig:
     max_trades_per_day: int
     one_trade_per_symbol_per_day: bool = True
     cancel_orders_on_bad_news: bool = True
+    sell_position_on_bad_news: bool = True
+    remove_watchlist_on_bad_news: bool = True
     block_saturday: bool = True
     block_sunday: bool = True
     block_monday_premarket: bool = False
@@ -59,7 +61,15 @@ class TradingConfig:
     watchlist_mode_enabled: bool = True
     watchlist_days: int = 3
     watchlist_volume_increase_percent: float = 20.0
-    watchlist_price_increase_percent: float = 3.0
+    watchlist_max_entries: int = 2000
+    historical_watchlist_max_entries: int = 2000
+    historical_watchlist_retention_days: int = 90
+    grid_exit_flexible: bool = True
+    grid_rvol_strong: float = 3.0
+    grid_rvol_weak: float = 1.5
+    grid_tier_adjust_percent: float = 10.0
+    ai_exit_enabled: bool = True
+    ai_exit_min_profit_percent: float = -5.0
     semi_automated_mode: bool = True
     auto_trade_on_signal: bool = False
     scanner_min_alert_score: int = 50
@@ -95,7 +105,8 @@ class TradingConfig:
     universe_scanner_enabled: bool = True
     universe_most_actives_top: int = 100
     universe_movers_top: int = 50
-    realtime_max_symbols_per_cycle: int = 50
+    realtime_max_symbols_per_cycle: int = 100
+    realtime_batch_rotation: bool = True
     unusual_whales_enabled: bool = True
     tradingview_enabled: bool = True
     tradingview_exchange: str = "NASDAQ"
@@ -227,6 +238,8 @@ def load_settings() -> Settings:
             max_trades_per_day=int(trading_raw.get("max_trades_per_day", 5)),
             one_trade_per_symbol_per_day=trading_raw.get("one_trade_per_symbol_per_day", True),
             cancel_orders_on_bad_news=trading_raw.get("cancel_orders_on_bad_news", True),
+            sell_position_on_bad_news=trading_raw.get("sell_position_on_bad_news", True),
+            remove_watchlist_on_bad_news=trading_raw.get("remove_watchlist_on_bad_news", True),
             block_saturday=trading_raw.get("block_saturday", True),
             block_sunday=trading_raw.get("block_sunday", True),
             block_monday_premarket=trading_raw.get("block_monday_premarket", False),
@@ -246,6 +259,15 @@ def load_settings() -> Settings:
             watchlist_days=int(trading_raw.get("watchlist_days", 3)),
             watchlist_volume_increase_percent=float(trading_raw.get("watchlist_volume_increase_percent", 20)),
             watchlist_price_increase_percent=float(trading_raw.get("watchlist_price_increase_percent", 3)),
+            watchlist_max_entries=int(trading_raw.get("watchlist_max_entries", 2000)),
+            historical_watchlist_max_entries=int(trading_raw.get("historical_watchlist_max_entries", 2000)),
+            historical_watchlist_retention_days=int(trading_raw.get("historical_watchlist_retention_days", 90)),
+            grid_exit_flexible=trading_raw.get("grid_exit_flexible", True),
+            grid_rvol_strong=float(trading_raw.get("grid_rvol_strong", 3.0)),
+            grid_rvol_weak=float(trading_raw.get("grid_rvol_weak", 1.5)),
+            grid_tier_adjust_percent=float(trading_raw.get("grid_tier_adjust_percent", 10.0)),
+            ai_exit_enabled=trading_raw.get("ai_exit_enabled", True),
+            ai_exit_min_profit_percent=float(trading_raw.get("ai_exit_min_profit_percent", -5.0)),
             semi_automated_mode=trading_raw.get("semi_automated_mode", True),
             auto_trade_on_signal=trading_raw.get("auto_trade_on_signal", False),
             scanner_min_alert_score=int(trading_raw.get("scanner_min_alert_score", 50)),
@@ -283,7 +305,8 @@ def load_settings() -> Settings:
             universe_scanner_enabled=trading_raw.get("universe_scanner_enabled", True),
             universe_most_actives_top=int(trading_raw.get("universe_most_actives_top", 100)),
             universe_movers_top=int(trading_raw.get("universe_movers_top", 50)),
-            realtime_max_symbols_per_cycle=int(trading_raw.get("realtime_max_symbols_per_cycle", 50)),
+            realtime_max_symbols_per_cycle=int(trading_raw.get("realtime_max_symbols_per_cycle", 100)),
+            realtime_batch_rotation=trading_raw.get("realtime_batch_rotation", True),
             unusual_whales_enabled=trading_raw.get("unusual_whales_enabled", True),
             tradingview_enabled=trading_raw.get("tradingview_enabled", True),
             tradingview_exchange=str(trading_raw.get("tradingview_exchange", "NASDAQ")),
