@@ -46,8 +46,9 @@ class SessionForwarder:
         self._thread = threading.Thread(target=self._run, name="session-forwarder", daemon=True)
         self._thread.start()
         logger.info(
-            "Session forwarder starting — %s source channel(s) → %s",
+            "Session forwarder starting — %s source channel(s) → map %s (fallback %s)",
             len(self.settings.forwarder.source_channel_ids),
+            self.settings.forwarder.dest_channel_map or "none",
             self.settings.forwarder.dest_channel_id,
         )
 
@@ -169,14 +170,18 @@ class SessionForwarder:
         mark_news(urls[0] if urls else message_id)
         logger.info("News received — speed timer started%s", f" ({symbol})" if symbol else "")
 
-        dest_id = str(self.settings.forwarder.dest_channel_id)
+        dest_id = str(self._resolve_dest(channel_id))
         bot.sendMessage(dest_id, text)
 
         self._seen_message_ids.add(message_id)
         self._trim_seen()
 
         author = data.get("author", {}).get("username", "?")
-        logger.info("Forwarded news from channel %s (by %s)%s", channel_id, author, f" [{symbol}]" if symbol else "")
+        logger.info("Forwarded to %s from channel %s (by %s)%s", dest_id, channel_id, author, f" [{symbol}]" if symbol else "")
+
+    def _resolve_dest(self, source_channel_id: int) -> int:
+        cfg = self.settings.forwarder
+        return cfg.dest_channel_map.get(source_channel_id, cfg.dest_channel_id)
 
     def _collect_image_urls(self, data: dict) -> list[str]:
         urls: list[str] = []

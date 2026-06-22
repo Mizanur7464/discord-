@@ -128,6 +128,7 @@ class ForwardConfig:
     user_token: str
     source_channel_ids: list[int]
     dest_channel_id: int
+    dest_channel_map: dict[int, int]
     require_news_url: bool = True
 
 
@@ -177,6 +178,17 @@ def _parse_channel_ids(raw: str) -> list[int]:
     return ids
 
 
+def _parse_channel_map(raw: str) -> dict[int, int]:
+    mapping: dict[int, int] = {}
+    for part in raw.split(","):
+        part = part.strip()
+        if not part or ":" not in part:
+            continue
+        src, dst = part.split(":", 1)
+        mapping[int(src.strip())] = int(dst.strip())
+    return mapping
+
+
 def load_settings() -> Settings:
     """Load all settings from config files and environment variables."""
     load_dotenv(ENV_PATH)
@@ -190,6 +202,7 @@ def load_settings() -> Settings:
     user_password = os.getenv("DISCORD_USER_PASSWORD", "").strip()
     forward_sources = os.getenv("FORWARD_SOURCE_CHANNEL_IDS", "").strip()
     forward_dest = os.getenv("FORWARD_DEST_CHANNEL_ID", "").strip()
+    forward_map_raw = os.getenv("FORWARD_CHANNEL_MAP", "").strip()
 
     if not source_channels and forward_dest:
         source_channels = forward_dest
@@ -215,6 +228,7 @@ def load_settings() -> Settings:
     source_channel_ids = _parse_channel_ids(source_channels)
     forward_source_ids = _parse_channel_ids(forward_sources) if forward_sources else []
     forward_dest_id = int(forward_dest) if forward_dest else (source_channel_ids[0] if source_channel_ids else 0)
+    forward_dest_map = _parse_channel_map(forward_map_raw)
 
     return Settings(
         bot=BotConfig(**raw["bot"]),
@@ -320,6 +334,7 @@ def load_settings() -> Settings:
             user_token=user_token,
             source_channel_ids=forward_source_ids,
             dest_channel_id=forward_dest_id,
+            dest_channel_map=forward_dest_map,
             require_news_url=forwarder_raw.get("require_news_url", True),
         ),
         discord_token=token,
