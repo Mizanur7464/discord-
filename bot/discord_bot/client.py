@@ -248,7 +248,7 @@ class NewsTradingBot(commands.Bot):
         symbol = article.symbols[0] if article.symbols else ""
         if self._news_channel:
             embed, link_view = build_benzinga_news_post(article)
-            await self._news_channel.send(embed=embed, view=link_view, suppress_embeds=True)
+            await self._news_channel.send(embed=embed, view=link_view)
 
         text = article.title if not article.body else f"{article.title}\n{article.body[:4000]}"
         item = await self.analyzer.analyze_text_async(
