@@ -9,6 +9,7 @@ import discord
 from discord.ext import commands
 
 from bot.news.analyzer import MessageAnalyzer, NewsItem
+from bot.news.benzinga_feed import BenzingaFeedPoller
 from bot.news.mosquito_vision import analyze_mosquito_image_urls
 from bot.news.symbols import extract_nuntio_headline, extract_stock_symbol, split_news_blocks
 from bot.news.url_fetcher import UrlFetchError, extract_urls, fetch_article, is_allowed_url
@@ -24,6 +25,9 @@ from bot.trading.universe_scanner import fetch_universe_symbols
 from bot.utils.config import Settings
 from bot.utils.timing import log_trade_speed, mark_news_if_absent, mark_step
 
+from bot.discord_bot.mosquito_embed import build_mosquito_embed
+from bot.discord_bot.scan_embed import build_scan_embed, format_scan_summary, _resolve_min_score
+from bot.discord_bot.summary_publisher import SummaryPublisher
 from bot.forwarder.client import SessionForwarder
 
 logger = logging.getLogger(__name__)
@@ -85,6 +89,8 @@ class NewsTradingBot(commands.Bot):
             benzinga_api_key=settings.benzinga_api_key,
             finnhub_api_key=settings.finnhub_api_key,
             unusual_whales_api_key=settings.unusual_whales_api_key,
+            watchlist_symbols_fn=self._collect_scan_symbols,
+            watchlist_activity_fn=self._watchlist_activity_for,
         )
         self.realtime_scanner: RealtimeScanner | None = None
         if settings.trading.realtime_scanner_enabled:
@@ -100,11 +106,21 @@ class NewsTradingBot(commands.Bot):
                 else None,
                 max_symbols_per_cycle=settings.trading.realtime_max_symbols_per_cycle,
                 batch_rotation=settings.trading.realtime_batch_rotation,
+                summary_update_fn=self.summary_publisher.update_scans,
+                batch_hook_fn=self._on_scan_batch,
             )
         self._monitoring = False
         self._background_tasks: list[asyncio.Task] = []
         self._alert_channel: discord.TextChannel | None = None
         self._watchlist_channel: discord.TextChannel | None = None
+        self._summary_channel: discord.TextChannel | None = None
+        self.summary_publisher = SummaryPublisher()
+        self.benzinga_feed: BenzingaFeedPoller | None = None
+        if settings.benzinga_api_key and settings.news.benzinga_feed_enabled:
+            self.benzinga_feed = BenzingaFeedPoller(api_key=settings.benzinga_api_key)
+        self._news_channel: discord.TextChannel | None = None
+        self._mosquito_channel: discord.TextChannel | None = None
+        self._mosquito_recent: dict[str, float] = {}
         self._processed_messages: set[str] = set()
 
     def _is_news_author(self, message: discord.Message) -> bool:
@@ -165,6 +181,27 @@ class NewsTradingBot(commands.Bot):
         else:
             self._watchlist_channel = self._alert_channel
 
+        if self.settings.summary_channel_id:
+            summary_channel = self.get_channel(self.settings.summary_channel_id)
+            if isinstance(summary_channel, discord.TextChannel):
+                self._summary_channel = summary_channel
+            else:
+                logger.warning("Summary channel not found. Check SUMMARY_CHANNEL_ID.")
+
+        if self.settings.news_channel_id:
+            news_channel = self.get_channel(self.settings.news_channel_id)
+            if isinstance(news_channel, discord.TextChannel):
+                self._news_channel = news_channel
+            else:
+                logger.warning("News channel not found. Check NEWS_CHANNEL_ID.")
+
+        if self.settings.mosquito_channel_id:
+            mosquito_channel = self.get_channel(self.settings.mosquito_channel_id)
+            if isinstance(mosquito_channel, discord.TextChannel):
+                self._mosquito_channel = mosquito_channel
+            else:
+                logger.warning("Mosquito channel not found. Check MOSQUITO_CHANNEL_ID.")
+
         if self.settings.bot.auto_start:
             self._monitoring = True
 
@@ -175,6 +212,63 @@ class NewsTradingBot(commands.Bot):
         self._background_tasks.append(asyncio.create_task(self._exit_monitor_loop()))
         if self.realtime_scanner:
             self._background_tasks.append(asyncio.create_task(self.realtime_scanner.run_loop()))
+        if self._summary_channel:
+            self._background_tasks.append(asyncio.create_task(self._summary_loop()))
+        if self.benzinga_feed:
+            self._background_tasks.append(asyncio.create_task(self._benzinga_feed_loop()))
+
+    async def _benzinga_feed_loop(self) -> None:
+        if not self.benzinga_feed:
+            return
+        interval = max(30, self.settings.news.benzinga_poll_interval_seconds)
+        logger.info("Benzinga news feed started (every %ss)", interval)
+        while True:
+            try:
+                articles = await asyncio.to_thread(self.benzinga_feed.poll_new)
+                for article in articles:
+                    await self._ingest_benzinga_article(article)
+            except Exception as exc:
+                logger.warning("Benzinga feed loop failed: %s", exc)
+            await asyncio.sleep(interval)
+
+    async def _ingest_benzinga_article(self, article) -> None:
+        from bot.news.benzinga import BenzingaArticle
+
+        if not isinstance(article, BenzingaArticle):
+            return
+        symbol = article.symbols[0] if article.symbols else ""
+        if self._news_channel:
+            preview = f"**{symbol}** — {article.title}" if symbol else article.title
+            body = preview if not article.url else f"{preview}\n{article.url}"
+            await self._news_channel.send(body[:2000])
+
+        text = article.title if not article.body else f"{article.title}\n{article.body[:4000]}"
+        item = await self.analyzer.analyze_text_async(
+            text,
+            source="Benzinga",
+            published=article.published or "Benzinga",
+            message_id=f"bz:{article.article_id}",
+            jump_url=article.url,
+            headline=article.title,
+            timing_key=f"bz:{article.article_id}",
+        )
+        if not item:
+            return
+        if symbol:
+            item.stock_symbol = symbol
+        trade_msg = await self._process_item(item, timing_key=f"bz:{article.article_id}")
+        await self.send_news_alert(item, trade_msg)
+        logger.info("Benzinga article processed: %s", article.title[:80])
+
+    async def _summary_loop(self) -> None:
+        interval = max(60, self.settings.trading.summary_interval_seconds)
+        while True:
+            try:
+                if self._summary_channel:
+                    await self.summary_publisher.publish(self._summary_channel)
+            except Exception as exc:
+                logger.warning("Summary publish failed: %s", exc)
+            await asyncio.sleep(interval)
 
     async def _exit_monitor_loop(self) -> None:
         cfg = self.settings.trading
@@ -210,6 +304,21 @@ class NewsTradingBot(commands.Bot):
                 symbols.append(symbol)
         return symbols[: self.settings.trading.historical_watchlist_max_entries]
 
+    def _watchlist_activity_for(self, symbol: str) -> str:
+        import time
+
+        symbol = symbol.upper()
+        entry = self.watchlist.get_entry(symbol)
+        if entry:
+            days = max(0, int((time.time() - entry.added_at) / 86400))
+            status = "triggered" if entry.triggered else "waiting breakout"
+            return f"AI watchlist · {status} · day {days}"
+        if symbol in self.historical_watchlist.symbols():
+            return "Historical runner pool"
+        if self.runner_history.get(symbol):
+            return "Runner history tracked"
+        return "None"
+
     def _track_historical_symbol(self, symbol: str, *, source: str, note: str = "") -> None:
         if symbol:
             self.historical_watchlist.add(symbol, source=source, note=note)
@@ -232,13 +341,53 @@ class NewsTradingBot(commands.Bot):
         )
         return universe.symbols
 
-    async def _send_realtime_alert(self, scan: ScanResult) -> None:
+    async def _send_scan_alert(
+        self,
+        scan: ScanResult,
+        *,
+        title_prefix: str = "Realtime Scanner",
+    ) -> None:
         channel = self._watchlist_channel or self._alert_channel
         if not channel:
             return
-        await channel.send(
-            f"🔎 **Realtime Scanner** `{scan.symbol}`\n{self._format_scan_action(scan)}"
+        embed = build_scan_embed(
+            scan,
+            min_score=self._scanner_min_score(scan),
+            title_prefix=title_prefix,
         )
+        await channel.send(embed=embed)
+
+    async def _on_scan_batch(self, scans: list[ScanResult]) -> None:
+        for scan in scans:
+            await self._maybe_send_mosquito_alert(scan)
+
+    def _qualifies_mosquito(self, scan: ScanResult) -> bool:
+        cfg = self.settings.trading
+        rvol = scan.current_rvol or scan.rvol
+        if rvol is not None and rvol >= cfg.mosquito_min_relative_volume:
+            return True
+        if scan.expansion and scan.expansion.volume_expansion_pct is not None:
+            if scan.expansion.volume_expansion_pct >= 20:
+                return True
+        if scan.daily_volume and scan.daily_volume >= cfg.mosquito_volume_min_value:
+            if rvol is not None and rvol >= 1.5:
+                return True
+        return False
+
+    async def _maybe_send_mosquito_alert(self, scan: ScanResult) -> None:
+        if not self._mosquito_channel or not self._qualifies_mosquito(scan):
+            return
+        import time
+
+        now = time.time()
+        cooldown = self.settings.trading.realtime_scan_alert_cooldown_seconds
+        if now - self._mosquito_recent.get(scan.symbol, 0) < cooldown:
+            return
+        await self._mosquito_channel.send(embed=build_mosquito_embed(scan))
+        self._mosquito_recent[scan.symbol] = now
+
+    async def _send_realtime_alert(self, scan: ScanResult) -> None:
+        await self._send_scan_alert(scan, title_prefix="Realtime Scanner")
 
     async def on_message(self, message: discord.Message) -> None:
         if not self._is_news_author(message):
@@ -394,31 +543,15 @@ class NewsTradingBot(commands.Bot):
             news_bullish=news_bullish,
         )
 
-    def _format_scan_action(self, scan: ScanResult) -> str:
-        profile_min = self.settings.trading.scanner_min_alert_score
-        if scan.profile_name and self.settings.trading.scanner_profiles:
-            profile = self.settings.trading.scanner_profiles.get(scan.profile_name)
-            if profile:
-                profile_min = profile.min_alert_score
-        min_score = profile_min
-        reasons = "; ".join(scan.reasons[:5]) if scan.reasons else "no strong signals"
-        warnings = f" Warnings: {'; '.join(scan.warnings[:4])}" if scan.warnings else ""
-        pullback_line = ""
-        if scan.pullback:
-            pullback_line = f"\nPullback: {scan.pullback.summary}"
-        if scan.suggested_limit_price:
-            pullback_line += f"\nSuggested limit: ${scan.suggested_limit_price:.2f}"
-        if scan.score >= min_score:
-            return (
-                f"Scanner {scan.grade} ({scan.score}/100) — actionable setup. "
-                f"Manual confirm with `/buy {scan.symbol}`\n"
-                f"{scan.summary}\n"
-                f"Checks: {reasons}.{warnings}{pullback_line}"
-            )
-        return (
-            f"Scanner {scan.grade} ({scan.score}/100) — below threshold ({min_score}). "
-            f"No auto action.\n{scan.summary}{warnings}{pullback_line}"
+    def _scanner_min_score(self, scan: ScanResult) -> int:
+        return _resolve_min_score(
+            scan,
+            self.settings.trading.scanner_min_alert_score,
+            self.settings.trading.scanner_profiles,
         )
+
+    def _format_scan_action(self, scan: ScanResult) -> str:
+        return format_scan_summary(scan, min_score=self._scanner_min_score(scan))
 
     async def _process_item(self, item: NewsItem, timing_key: str = "") -> str | None:
         key = timing_key or item.link
@@ -608,15 +741,13 @@ class NewsTradingBot(commands.Bot):
                 mosquito_signal=trigger.signal,
                 news_bullish=True,
             )
-            trade_msg = self._format_scan_action(scan)
-            channel = self._watchlist_channel or self._alert_channel
-            if channel:
-                await channel.send(
-                    f"🚀 **Watchlist Trigger** `{entry.symbol}`\n"
-                    f"{msg}\n"
-                    f"{trade_msg}"
-                )
-            logger.info("Watchlist trigger %s — %s — %s", entry.symbol, msg, trade_msg)
+            await self._send_scan_alert(scan, title_prefix="Watchlist Trigger")
+            logger.info(
+                "Watchlist trigger %s — %s — %s",
+                entry.symbol,
+                msg,
+                self._format_scan_action(scan),
+            )
             return
 
         trade_result = await self.trading_engine.process_signal(
@@ -838,23 +969,39 @@ class NewsTradingBot(commands.Bot):
         if not self._alert_channel:
             return
 
+        category_colors = {
+            "Major Catalyst": discord.Color.green(),
+            "Earnings": discord.Color.from_rgb(46, 204, 113),
+            "FDA / Biotech Catalyst": discord.Color.from_rgb(52, 152, 219),
+            "Contract Announcement": discord.Color.from_rgb(41, 128, 185),
+            "Partnership": discord.Color.from_rgb(26, 188, 156),
+            "Public Offering": discord.Color.orange(),
+            "Reverse Split": discord.Color.red(),
+            "Ordinary News": discord.Color.gold(),
+            "No Clear Catalyst": discord.Color.light_grey(),
+        }
+
         if item.sentiment == "bullish":
-            emoji, color = "🟢", discord.Color.green()
+            emoji = "🟢"
         elif item.sentiment == "ignored":
-            emoji, color = "⚪", discord.Color.light_grey()
+            emoji = "⚪"
         elif item.sentiment == "neutral":
-            emoji, color = "🟡", discord.Color.gold()
+            emoji = "🟡"
         else:
-            emoji, color = "🔴", discord.Color.red()
+            emoji = "🔴"
+
+        color = category_colors.get(item.news_category, discord.Color.gold())
 
         embed = discord.Embed(
-            title=f"{emoji} {item.sentiment.upper()} News Alert",
+            title=f"{emoji} {item.news_category}",
             description=item.title[:4096],
             color=color,
             url=item.link or None,
         )
+        embed.add_field(name="News Category", value=item.news_category, inline=True)
+        embed.add_field(name="Sentiment", value=item.sentiment.upper(), inline=True)
         embed.add_field(name="Source", value=item.source, inline=True)
-        embed.add_field(name="AI Says", value=item.ai_reason, inline=True)
+        embed.add_field(name="AI Says", value=item.ai_reason, inline=False)
         if item.daily_volume is not None:
             embed.add_field(name="Volume", value=f"{item.daily_volume:,} daily", inline=True)
         if self.analyzer.config.ai_sentiment_enabled and self.analyzer.config.openai_api_key:
@@ -989,7 +1136,13 @@ class BotCommands(commands.Cog):
         except Exception as exc:
             await interaction.followup.send(f"Scanner failed for `{symbol}`: {exc}")
             return
-        await interaction.followup.send(self.bot._format_scan_action(scan))
+        await interaction.followup.send(
+            embed=build_scan_embed(
+                scan,
+                min_score=self.bot._scanner_min_score(scan),
+                title_prefix="Scanner",
+            )
+        )
 
     @discord.app_commands.command(name="universe", description="Show broad market universe from Alpaca screener")
     async def universe_cmd(self, interaction: discord.Interaction) -> None:
@@ -1028,8 +1181,25 @@ class BotCommands(commands.Cog):
         if not scans:
             await interaction.followup.send("No symbols in watchlist/runner history to scan.")
             return
-        lines = [self.bot._format_scan_action(scan) for scan in scans[:10]]
-        await interaction.followup.send("🔎 **Market scan**\n\n" + "\n\n".join(lines))
+        actionable = [
+            scan
+            for scan in scans
+            if scan.score >= self.bot._scanner_min_score(scan)
+        ][:5]
+        if not actionable:
+            await interaction.followup.send("No actionable setups found in the current watchlist scan.")
+            return
+        await interaction.followup.send(
+            f"🔎 **Market scan** — {len(actionable)} setup(s)",
+            embeds=[
+                build_scan_embed(
+                    scan,
+                    min_score=self.bot._scanner_min_score(scan),
+                    title_prefix="Market Scan",
+                )
+                for scan in actionable
+            ],
+        )
 
     @discord.app_commands.command(name="exits", description="Show active tiered exit and trailing stop plans")
     async def exits_cmd(self, interaction: discord.Interaction) -> None:

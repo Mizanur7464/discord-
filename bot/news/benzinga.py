@@ -1,10 +1,12 @@
-"""Optional Benzinga news catalyst lookup."""
+"""Benzinga news API — catalyst lookup and licensed news feed."""
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass, field
 from urllib.parse import quote
+from urllib.request import Request, urlopen
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +30,91 @@ CATALYST_KEYWORDS = (
     "phase",
     "launch",
 )
+
+
+@dataclass
+class BenzingaArticle:
+    article_id: str
+    title: str
+    url: str = ""
+    body: str = ""
+    symbols: list[str] = field(default_factory=list)
+    published: str = ""
+
+
+def _news_items_from_payload(payload) -> list[dict]:
+    if isinstance(payload, list):
+        return [item for item in payload if isinstance(item, dict)]
+    if isinstance(payload, dict):
+        for key in ("news", "data", "articles"):
+            items = payload.get(key)
+            if isinstance(items, list):
+                return [item for item in items if isinstance(item, dict)]
+    return []
+
+
+def _parse_symbols(item: dict) -> list[str]:
+    symbols: list[str] = []
+    for key in ("stocks", "securities", "tickers"):
+        raw = item.get(key)
+        if not isinstance(raw, list):
+            continue
+        for entry in raw:
+            if isinstance(entry, dict):
+                sym = entry.get("name") or entry.get("symbol") or entry.get("ticker")
+                if sym:
+                    symbols.append(str(sym).upper())
+            elif entry:
+                symbols.append(str(entry).upper())
+    return symbols[:8]
+
+
+def parse_benzinga_article(item: dict) -> BenzingaArticle | None:
+    article_id = str(item.get("id") or item.get("benzinga_id") or item.get("article_id") or "").strip()
+    title = str(item.get("title") or item.get("headline") or "").strip()
+    if not title:
+        return None
+    if not article_id:
+        article_id = str(hash(title))
+    body = str(item.get("body") or item.get("teaser") or item.get("summary") or "").strip()
+    url = str(item.get("url") or item.get("link") or "").strip()
+    published = str(item.get("created") or item.get("published") or item.get("updated") or "").strip()
+    return BenzingaArticle(
+        article_id=article_id,
+        title=title,
+        url=url,
+        body=body,
+        symbols=_parse_symbols(item),
+        published=published,
+    )
+
+
+def _fetch_news_payload(api_key: str, *, symbols: str = "", page_size: int = 25) -> list[dict]:
+    query = (
+        f"https://api.benzinga.com/api/v2/news"
+        f"?token={quote(api_key)}&pageSize={page_size}&displayOutput=full"
+    )
+    if symbols:
+        query += f"&symbols={quote(symbols.upper())}"
+    with urlopen(Request(query, headers={"Accept": "application/json", "User-Agent": "discord-news-bot/1.0"}), timeout=15) as resp:
+        raw = resp.read().decode("utf-8", errors="ignore")
+    if raw.lstrip().startswith("<"):
+        logger.warning("Benzinga returned non-JSON news payload")
+        return []
+    payload = json.loads(raw)
+    return _news_items_from_payload(payload)
+
+
+def fetch_recent_news(api_key: str, *, page_size: int = 25) -> list[BenzingaArticle]:
+    if not api_key:
+        return []
+    try:
+        items = _fetch_news_payload(api_key, page_size=page_size)
+        articles = [parse_benzinga_article(item) for item in items]
+        return [article for article in articles if article]
+    except Exception as exc:
+        logger.warning("Benzinga news fetch failed: %s", exc)
+        return []
 
 
 @dataclass
@@ -75,22 +162,8 @@ def fetch_catalyst_sync(symbol: str, api_key: str) -> CatalystResult | None:
     if not api_key:
         return None
     try:
-        import urllib.request
-
-        url = (
-            "https://api.benzinga.com/api/v2/news"
-            f"?token={quote(api_key)}&symbols={quote(symbol.upper())}&pageSize=3&displayOutput=full"
-        )
-        req = urllib.request.Request(url, headers={"Accept": "application/json"})
-        with urllib.request.urlopen(req, timeout=12) as resp:
-            raw = resp.read().decode("utf-8", errors="ignore")
-        if raw.lstrip().startswith("<"):
-            logger.warning("Benzinga returned non-JSON for %s", symbol)
-            return None
-        import json
-
-        payload = json.loads(raw)
-        return parse_benzinga_payload(symbol, payload)
+        items = _fetch_news_payload(api_key, symbols=symbol.upper(), page_size=3)
+        return parse_benzinga_payload(symbol, items)
     except Exception as exc:
         logger.warning("Benzinga catalyst lookup failed for %s: %s", symbol, exc)
         return None

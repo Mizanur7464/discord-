@@ -8,6 +8,7 @@ from dataclasses import dataclass
 
 from bot.news.ai_sentiment import AISentimentError, classify_headline
 from bot.news.symbols import extract_nuntio_headline, extract_stock_symbol, is_weak_headline
+from bot.trading.catalyst_labels import classify_news_text
 from bot.utils.config import NewsConfig
 from bot.utils.timing import mark_step
 
@@ -43,6 +44,7 @@ class NewsItem:
     message_id: str
     stock_symbol: str = ""
     daily_volume: int | None = None
+    news_category: str = "No Clear Catalyst"
 
 
 class MessageAnalyzer:
@@ -171,6 +173,8 @@ class MessageAnalyzer:
         if len(preview) > 300:
             preview = preview[:297] + "..."
 
+        news_category = classify_news_text(f"{head}\n{text}", sentiment=sentiment)
+
         return NewsItem(
             title=preview,
             link=jump_url,
@@ -180,6 +184,7 @@ class MessageAnalyzer:
             ai_reason=ai_reason,
             message_id=message_id,
             stock_symbol=symbol,
+            news_category=news_category,
         )
 
     async def analyze_article_async(

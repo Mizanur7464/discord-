@@ -12,6 +12,11 @@ from bot.trading.data_providers import MarketDataProvider
 from bot.trading.indicators import IndicatorSnapshot
 from bot.trading.market_data import fetch_gap_and_session_change
 from bot.trading.microstructure import MicrostructureSnapshot, analyze_microstructure, score_microstructure
+from bot.trading.catalyst_labels import classify_catalyst
+from bot.trading.expansion_metrics import ExpansionMetrics, compute_expansion_metrics
+from bot.trading.liquidity_persistence import LiquidityPersistenceStore
+from bot.trading.market_structure import MarketStructureSnapshot, analyze_market_structure
+from bot.trading.peak_rvol import PeakRvolRecord, PeakRvolStore
 from bot.trading.pullback import PullbackSetup, analyze_pullback
 from bot.trading.runner_history import RunnerHistoryStore
 from bot.trading.scanner_profiles import ScannerProfile, get_active_profile
@@ -50,6 +55,25 @@ class ScanResult:
     microstructure: MicrostructureSnapshot | None = None
     whale_flow: WhaleSnapshot | None = None
     tradingview: TradingViewSnapshot | None = None
+    expansion: ExpansionMetrics | None = None
+    structure: MarketStructureSnapshot | None = None
+    peak_rvol_record: PeakRvolRecord | None = None
+    peak_rvol: float | None = None
+    peak_rvol_at: str = ""
+    peak_rvol_rank: int | None = None
+    current_rvol: float | None = None
+    liquidity_rank: int | None = None
+    liquidity_percentile: int | None = None
+    liquidity_score: int | None = None
+    liquidity_expansion: int | None = None
+    historical_runner_score: int = 0
+    on_watchlist: bool = False
+    watchlist_activity: str = "None"
+    catalyst_detected: bool = False
+    catalyst_label: str = "No Clear Catalyst"
+    market_structure_state: str = "unknown"
+    liquidity_persistence_score: int = 0
+    turnover_acceleration_pct: float | None = None
     data_provider_name: str = "alpaca"
     reasons: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
@@ -99,6 +123,9 @@ class SymbolScanner:
         benzinga_api_key: str = "",
         finnhub_api_key: str = "",
         unusual_whales_api_key: str = "",
+        peak_rvol_store: PeakRvolStore | None = None,
+        watchlist_symbols_fn=None,
+        watchlist_activity_fn=None,
     ):
         self.cfg = trading_config
         self.runner_history = runner_history
@@ -109,6 +136,10 @@ class SymbolScanner:
         self._benzinga_api_key = benzinga_api_key
         self._finnhub_api_key = finnhub_api_key
         self._unusual_whales_api_key = unusual_whales_api_key
+        self._peak_rvol_store = peak_rvol_store or PeakRvolStore()
+        self._persistence_store = LiquidityPersistenceStore()
+        self._watchlist_symbols_fn = watchlist_symbols_fn
+        self._watchlist_activity_fn = watchlist_activity_fn
 
     def scan(
         self,
@@ -176,6 +207,11 @@ class SymbolScanner:
         if result.price and result.daily_volume:
             result.turnover_usd = result.price * result.daily_volume
 
+        if result.float_shares is None and self._finnhub_api_key:
+            from bot.trading.market_data import fetch_float_shares_sync
+
+            result.float_shares = fetch_float_shares_sync(symbol, self._finnhub_api_key)
+
         if mosquito_signal:
             result.mosquito_confirmed = True
             if mosquito_signal.float_shares:
@@ -216,8 +252,22 @@ class SymbolScanner:
         if runner:
             result.stars = runner.stars
             result.is_repeat_runner = self.runner_history.is_repeat_runner(symbol)
+            result.historical_runner_score = min(
+                100,
+                runner.stars * 25
+                + min(int(runner.best_single_day_pct), 50)
+                + min(runner.times_seen * 3, 25),
+            )
 
         if result.price and bars_1m:
+            result.expansion = compute_expansion_metrics(
+                bars_1m,
+                daily_rvol=result.rvol,
+                avg_volume=float(result.avg_volume) if result.avg_volume else None,
+                turnover_usd=result.turnover_usd,
+                price=result.price,
+            )
+            result.structure = analyze_market_structure(bars_1m, current_price=result.price)
             result.pullback = analyze_pullback(
                 bars_1m,
                 result.price,
@@ -229,10 +279,54 @@ class SymbolScanner:
             if result.pullback:
                 result.suggested_limit_price = result.pullback.suggested_limit
 
+        rvol_for_peak = result.rvol
+        if result.expansion and result.expansion.intraday_rvol is not None:
+            rvol_for_peak = result.expansion.intraday_rvol
+        peak_record = self._peak_rvol_store.update(symbol, rvol_for_peak)
+        if peak_record:
+            result.peak_rvol_record = peak_record
+            result.peak_rvol = peak_record.peak_rvol
+            result.peak_rvol_at = peak_record.peak_time_utc
+
+        if self._watchlist_symbols_fn:
+            try:
+                result.on_watchlist = symbol in {s.upper() for s in self._watchlist_symbols_fn()}
+            except Exception:
+                result.on_watchlist = False
+
+        if self._watchlist_activity_fn:
+            try:
+                result.watchlist_activity = self._watchlist_activity_fn(symbol)
+            except Exception:
+                result.watchlist_activity = "None"
+        elif result.on_watchlist:
+            result.watchlist_activity = "Active"
+
+        result.current_rvol = rvol_for_peak
+        if result.expansion:
+            result.liquidity_expansion = result.expansion.liquidity_expansion_score
+
+        if result.structure:
+            result.market_structure_state = result.structure.state.replace("_", " ")
+
+        result.catalyst_label, result.catalyst_detected = classify_catalyst(
+            catalyst=result.catalyst,
+            news_bullish=result.news_bullish,
+            mosquito_confirmed=result.mosquito_confirmed,
+        )
+
+        result.liquidity_persistence_score = self._persistence_store.update(symbol, result.turnover_usd)
+        if result.expansion:
+            result.turnover_acceleration_pct = result.expansion.turnover_expansion_pct
+
         self._apply_profile_filters(result, profile)
         self._score(result, profile, mosquito_signal)
         if result.price is not None:
-            self.runner_history.record_sighting(symbol, price=result.price)
+            self.runner_history.record_sighting(
+                symbol,
+                price=result.price,
+                move_pct=result.session_change_pct,
+            )
         return result
 
     def _resolve_price(self, symbol: str) -> float:
@@ -390,6 +484,39 @@ class SymbolScanner:
             score += tv_score
             result.reasons.extend(tv_reasons)
             result.warnings.extend(tv_warnings)
+
+        if result.peak_rvol and result.rvol and result.peak_rvol > 0:
+            peak_ratio = result.rvol / result.peak_rvol
+            if peak_ratio >= 0.8:
+                score += 8
+                result.reasons.append(f"near session peak RVOL ({result.peak_rvol:.1f}x @ {result.peak_rvol_at})")
+            elif result.expansion and result.expansion.rvol_expansion_pct and result.expansion.rvol_expansion_pct > 20:
+                score += 6
+                result.reasons.append("RVOL expanding")
+
+        if result.liquidity_rank is not None and result.liquidity_rank <= 5:
+            score += 6
+            result.reasons.append(f"liquidity rank #{result.liquidity_rank}")
+
+        if result.expansion and result.expansion.liquidity_expansion_score >= 50:
+            score += min(10, result.expansion.liquidity_expansion_score // 10)
+            result.reasons.append(f"liquidity expansion {result.expansion.liquidity_expansion_score}/100")
+
+        if result.structure and result.structure.quality_score >= 60:
+            score += min(10, result.structure.quality_score // 10)
+            result.reasons.append(f"market structure: {result.structure.state}")
+
+        if result.historical_runner_score >= 40:
+            score += min(8, result.historical_runner_score // 10)
+            result.reasons.append(f"historical runner score {result.historical_runner_score}/100")
+
+        if result.on_watchlist:
+            score += 4
+            result.reasons.append("active watchlist symbol")
+
+        if result.catalyst_detected:
+            score += 5
+            result.reasons.append("catalyst detected")
 
         result.score = max(0, min(100, score))
         result.grade = self._grade(result.score)

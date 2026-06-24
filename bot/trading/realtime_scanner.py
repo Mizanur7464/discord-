@@ -6,6 +6,8 @@ import asyncio
 import logging
 import time
 
+from bot.trading.liquidity_rank import apply_liquidity_ranks, apply_peak_rvol_ranks
+
 logger = logging.getLogger(__name__)
 
 
@@ -22,6 +24,8 @@ class RealtimeScanner:
         universe_symbols_fn=None,
         max_symbols_per_cycle: int = 100,
         batch_rotation: bool = True,
+        summary_update_fn=None,
+        batch_hook_fn=None,
     ):
         self.interval_seconds = max(10, interval_seconds)
         self.min_score = min_score
@@ -32,6 +36,8 @@ class RealtimeScanner:
         self._collect_symbols_fn = collect_symbols_fn
         self._universe_symbols_fn = universe_symbols_fn
         self._send_alert_fn = send_alert_fn
+        self._summary_update_fn = summary_update_fn
+        self._batch_hook_fn = batch_hook_fn
         self._recent_alerts: dict[str, float] = {}
         self._running = False
         self._universe_cache: list[str] = []
@@ -89,16 +95,27 @@ class RealtimeScanner:
         symbols = self._merged_symbols()
         if not symbols:
             return 0
-        sent = 0
         now = time.time()
+        batch_scans = []
         for symbol in symbols:
-            if now - self._recent_alerts.get(symbol, 0) < self.alert_cooldown_seconds:
-                continue
             scan = await asyncio.to_thread(self._scan_fn, symbol)
+            batch_scans.append(scan)
+
+        apply_liquidity_ranks(batch_scans)
+        apply_peak_rvol_ranks(batch_scans)
+        if self._summary_update_fn:
+            self._summary_update_fn(batch_scans)
+        if self._batch_hook_fn:
+            await self._batch_hook_fn(batch_scans)
+
+        sent = 0
+        for scan in batch_scans:
             if scan.score < self.min_score:
                 continue
+            if now - self._recent_alerts.get(scan.symbol, 0) < self.alert_cooldown_seconds:
+                continue
             await self._send_alert_fn(scan)
-            self._recent_alerts[symbol] = now
+            self._recent_alerts[scan.symbol] = now
             sent += 1
         if sent:
             logger.info("Realtime scanner sent %s alert(s)", sent)
@@ -109,4 +126,6 @@ class RealtimeScanner:
         for symbol in self._merged_symbols():
             scan = await asyncio.to_thread(self._scan_fn, symbol)
             results.append(scan)
+        apply_liquidity_ranks(results)
+        apply_peak_rvol_ranks(results)
         return results

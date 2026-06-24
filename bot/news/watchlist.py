@@ -134,6 +134,10 @@ class WatchlistStore:
         self._trim()
         return list(self._entries.values())
 
+    def get_entry(self, symbol: str) -> WatchEntry | None:
+        self._trim()
+        return self._entries.get(symbol.upper())
+
     def _apply_baseline(self, entry: WatchEntry, signal: VolumeSignal) -> None:
         if signal.value and entry.baseline_volume is None:
             entry.baseline_volume = signal.value
