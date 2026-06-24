@@ -16,6 +16,7 @@ from bot.trading.catalyst_labels import classify_catalyst
 from bot.trading.expansion_metrics import ExpansionMetrics, compute_expansion_metrics
 from bot.trading.liquidity_persistence import LiquidityPersistenceStore
 from bot.trading.market_structure import MarketStructureSnapshot, analyze_market_structure
+from bot.trading.mosquito_metrics import compute_mosquito_bar_metrics
 from bot.trading.peak_rvol import PeakRvolRecord, PeakRvolStore
 from bot.trading.pullback import PullbackSetup, analyze_pullback
 from bot.trading.runner_history import RunnerHistoryStore
@@ -74,6 +75,11 @@ class ScanResult:
     market_structure_state: str = "unknown"
     liquidity_persistence_score: int = 0
     turnover_acceleration_pct: float | None = None
+    volume_1m: int | None = None
+    volume_2m: int | None = None
+    volume_5m: int | None = None
+    mosquito_nhod: bool = False
+    mosquito_nlod: bool = False
     data_provider_name: str = "alpaca"
     reasons: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
@@ -268,6 +274,12 @@ class SymbolScanner:
                 price=result.price,
             )
             result.structure = analyze_market_structure(bars_1m, current_price=result.price)
+            bar_metrics = compute_mosquito_bar_metrics(bars_1m, price=result.price)
+            result.volume_1m = bar_metrics.volume_1m
+            result.volume_2m = bar_metrics.volume_2m
+            result.volume_5m = bar_metrics.volume_5m
+            result.mosquito_nhod = bar_metrics.nhod
+            result.mosquito_nlod = bar_metrics.nlod
             result.pullback = analyze_pullback(
                 bars_1m,
                 result.price,

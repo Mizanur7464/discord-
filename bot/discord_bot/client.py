@@ -25,7 +25,7 @@ from bot.trading.universe_scanner import fetch_universe_symbols
 from bot.utils.config import Settings
 from bot.utils.timing import log_trade_speed, mark_news_if_absent, mark_step
 
-from bot.discord_bot.mosquito_embed import build_mosquito_embed
+from bot.discord_bot.mosquito_embed import build_mosquito_alert
 from bot.discord_bot.scan_embed import build_scan_embed, format_scan_summary, _resolve_min_score
 from bot.discord_bot.summary_publisher import SummaryPublisher
 from bot.forwarder.client import SessionForwarder
@@ -383,7 +383,8 @@ class NewsTradingBot(commands.Bot):
         cooldown = self.settings.trading.realtime_scan_alert_cooldown_seconds
         if now - self._mosquito_recent.get(scan.symbol, 0) < cooldown:
             return
-        await self._mosquito_channel.send(embed=build_mosquito_embed(scan))
+        content, embed = build_mosquito_alert(scan)
+        await self._mosquito_channel.send(content=content, embed=embed)
         self._mosquito_recent[scan.symbol] = now
 
     async def _send_realtime_alert(self, scan: ScanResult) -> None:
