@@ -92,6 +92,10 @@ class NewsTradingBot(commands.Bot):
             watchlist_symbols_fn=self._collect_scan_symbols,
             watchlist_activity_fn=self._watchlist_activity_for,
         )
+        self.summary_publisher = SummaryPublisher()
+        self.benzinga_feed: BenzingaFeedPoller | None = None
+        if settings.benzinga_api_key and settings.news.benzinga_feed_enabled:
+            self.benzinga_feed = BenzingaFeedPoller(api_key=settings.benzinga_api_key)
         self.realtime_scanner: RealtimeScanner | None = None
         if settings.trading.realtime_scanner_enabled:
             self.realtime_scanner = RealtimeScanner(
@@ -114,10 +118,6 @@ class NewsTradingBot(commands.Bot):
         self._alert_channel: discord.TextChannel | None = None
         self._watchlist_channel: discord.TextChannel | None = None
         self._summary_channel: discord.TextChannel | None = None
-        self.summary_publisher = SummaryPublisher()
-        self.benzinga_feed: BenzingaFeedPoller | None = None
-        if settings.benzinga_api_key and settings.news.benzinga_feed_enabled:
-            self.benzinga_feed = BenzingaFeedPoller(api_key=settings.benzinga_api_key)
         self._news_channel: discord.TextChannel | None = None
         self._mosquito_channel: discord.TextChannel | None = None
         self._mosquito_recent: dict[str, float] = {}
