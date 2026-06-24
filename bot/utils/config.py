@@ -29,7 +29,7 @@ class NewsConfig:
     openai_model: str = "gpt-4o-mini"
     openai_api_key: str = ""
     benzinga_feed_enabled: bool = False
-    benzinga_poll_interval_seconds: int = 60
+    benzinga_poll_interval_seconds: int = 20
 
 
 @dataclass
@@ -255,7 +255,7 @@ def load_settings() -> Settings:
                 "benzinga_feed_enabled",
                 bool(os.getenv("BENZINGA_API_KEY", "").strip()),
             ),
-            benzinga_poll_interval_seconds=int(news_raw.get("benzinga_poll_interval_seconds", 60)),
+            benzinga_poll_interval_seconds=int(news_raw.get("benzinga_poll_interval_seconds", 20)),
         ),
         trading=TradingConfig(
             enabled=trading_raw["enabled"],

@@ -26,6 +26,7 @@ from bot.utils.config import Settings
 from bot.utils.timing import log_trade_speed, mark_news_if_absent, mark_step
 
 from bot.discord_bot.mosquito_embed import build_mosquito_alert
+from bot.discord_bot.news_embed import build_benzinga_news_post
 from bot.discord_bot.scan_embed import build_scan_embed, format_scan_summary, _resolve_min_score
 from bot.discord_bot.summary_publisher import SummaryPublisher
 from bot.forwarder.client import SessionForwarder
@@ -220,7 +221,7 @@ class NewsTradingBot(commands.Bot):
     async def _benzinga_feed_loop(self) -> None:
         if not self.benzinga_feed:
             return
-        interval = max(30, self.settings.news.benzinga_poll_interval_seconds)
+        interval = max(15, self.settings.news.benzinga_poll_interval_seconds)
         logger.info("Benzinga news feed started (every %ss)", interval)
         while True:
             try:
@@ -238,9 +239,8 @@ class NewsTradingBot(commands.Bot):
             return
         symbol = article.symbols[0] if article.symbols else ""
         if self._news_channel:
-            preview = f"**{symbol}** — {article.title}" if symbol else article.title
-            body = preview if not article.url else f"{preview}\n{article.url}"
-            await self._news_channel.send(body[:2000])
+            embed, link_view = build_benzinga_news_post(article)
+            await self._news_channel.send(embed=embed, view=link_view, suppress_embeds=True)
 
         text = article.title if not article.body else f"{article.title}\n{article.body[:4000]}"
         item = await self.analyzer.analyze_text_async(

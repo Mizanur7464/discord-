@@ -16,7 +16,7 @@ news:
   ai_sentiment_enabled: true    # all buy/ignore/neutral signals decided by OpenAI
   openai_model: gpt-4o-mini
   benzinga_feed_enabled: true   # licensed news from Benzinga API (replaces NB news)
-  benzinga_poll_interval_seconds: 60
+  benzinga_poll_interval_seconds: 20   # faster poll (was 60); needs Benzinga Pro for best speed
 
   allowed_url_domains:
     - news.nuntiobot.com
