@@ -68,8 +68,10 @@ def main() -> None:
             print(f"   Forward to: {settings.forwarder.dest_channel_id}")
     print("   Press Ctrl+C to stop\n")
 
-    forwarder = SessionForwarder(settings)
-    forwarder.start_background()
+    forwarder = None
+    if settings.forwarder.enabled and settings.forwarder.source_channel_ids:
+        forwarder = SessionForwarder(settings)
+        forwarder.start_background()
 
     try:
         asyncio.run(run_bot(settings, forwarder))
