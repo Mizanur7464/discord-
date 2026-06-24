@@ -60,6 +60,12 @@ class TradingConfig:
     mosquito_volume_min_value: float = 1_000_000
     mosquito_min_relative_volume: float = 2.0
     mosquito_volume_confirm_minutes: int = 60
+    mosquito_alerts_enabled: bool = True
+    mosquito_alert_cooldown_seconds: int = 600
+    mosquito_max_alerts_per_batch: int = 3
+    mosquito_automute_window_seconds: int = 90
+    mosquito_automute_max_alerts: int = 8
+    mosquito_automute_duration_seconds: int = 180
     watchlist_mode_enabled: bool = True
     watchlist_days: int = 3
     watchlist_volume_increase_percent: float = 20.0
@@ -284,6 +290,12 @@ def load_settings() -> Settings:
             mosquito_volume_min_value=float(trading_raw.get("mosquito_volume_min_value", 1_000_000)),
             mosquito_min_relative_volume=float(trading_raw.get("mosquito_min_relative_volume", 2.0)),
             mosquito_volume_confirm_minutes=int(trading_raw.get("mosquito_volume_confirm_minutes", 60)),
+            mosquito_alerts_enabled=trading_raw.get("mosquito_alerts_enabled", True),
+            mosquito_alert_cooldown_seconds=int(trading_raw.get("mosquito_alert_cooldown_seconds", 600)),
+            mosquito_max_alerts_per_batch=int(trading_raw.get("mosquito_max_alerts_per_batch", 3)),
+            mosquito_automute_window_seconds=int(trading_raw.get("mosquito_automute_window_seconds", 90)),
+            mosquito_automute_max_alerts=int(trading_raw.get("mosquito_automute_max_alerts", 8)),
+            mosquito_automute_duration_seconds=int(trading_raw.get("mosquito_automute_duration_seconds", 180)),
             watchlist_mode_enabled=trading_raw.get("watchlist_mode_enabled", True),
             watchlist_days=int(trading_raw.get("watchlist_days", 3)),
             watchlist_volume_increase_percent=float(trading_raw.get("watchlist_volume_increase_percent", 20)),

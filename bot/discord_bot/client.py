@@ -25,6 +25,7 @@ from bot.trading.universe_scanner import fetch_universe_symbols
 from bot.utils.config import Settings
 from bot.utils.timing import log_trade_speed, mark_news_if_absent, mark_step
 
+from bot.discord_bot.mosquito_automute import MosquitoAutoMute
 from bot.discord_bot.mosquito_embed import build_mosquito_alert
 from bot.discord_bot.news_embed import build_benzinga_news_post
 from bot.discord_bot.scan_embed import build_scan_embed, format_scan_summary, _resolve_min_score
@@ -122,6 +123,13 @@ class NewsTradingBot(commands.Bot):
         self._news_channel: discord.TextChannel | None = None
         self._mosquito_channel: discord.TextChannel | None = None
         self._mosquito_recent: dict[str, float] = {}
+        cfg = settings.trading
+        self._mosquito_automute = MosquitoAutoMute(
+            window_seconds=cfg.mosquito_automute_window_seconds,
+            max_alerts_in_window=cfg.mosquito_automute_max_alerts,
+            mute_seconds=cfg.mosquito_automute_duration_seconds,
+        )
+        self._mosquito_mute_notice_at: float = 0.0
         self._processed_messages: set[str] = set()
 
     def _is_news_author(self, message: discord.Message) -> bool:
@@ -358,20 +366,34 @@ class NewsTradingBot(commands.Bot):
         await channel.send(embed=embed)
 
     async def _on_scan_batch(self, scans: list[ScanResult]) -> None:
-        for scan in scans:
+        if not self.settings.trading.mosquito_alerts_enabled:
+            return
+        candidates = [scan for scan in scans if self._qualifies_mosquito(scan)]
+        if not candidates:
+            return
+        candidates.sort(key=self._mosquito_rank_score, reverse=True)
+        limit = max(1, self.settings.trading.mosquito_max_alerts_per_batch)
+        for scan in candidates[:limit]:
             await self._maybe_send_mosquito_alert(scan)
+
+    @staticmethod
+    def _mosquito_rank_score(scan: ScanResult) -> float:
+        rvol = scan.current_rvol or scan.rvol or 0.0
+        expansion = scan.expansion.volume_expansion_pct if scan.expansion else 0.0
+        liquidity = float(scan.liquidity_expansion or 0)
+        nhod_bonus = 10.0 if scan.mosquito_nhod else 0.0
+        return rvol * 10 + max(expansion, 0) + liquidity + nhod_bonus
 
     def _qualifies_mosquito(self, scan: ScanResult) -> bool:
         cfg = self.settings.trading
         rvol = scan.current_rvol or scan.rvol
-        if rvol is not None and rvol >= cfg.mosquito_min_relative_volume:
+        if rvol is not None and rvol >= max(cfg.mosquito_min_relative_volume, 2.5):
             return True
         if scan.expansion and scan.expansion.volume_expansion_pct is not None:
-            if scan.expansion.volume_expansion_pct >= 20:
+            if scan.expansion.volume_expansion_pct >= 50 and rvol is not None and rvol >= 2.0:
                 return True
-        if scan.daily_volume and scan.daily_volume >= cfg.mosquito_volume_min_value:
-            if rvol is not None and rvol >= 1.5:
-                return True
+        if scan.mosquito_nhod and rvol is not None and rvol >= 2.0:
+            return True
         return False
 
     async def _maybe_send_mosquito_alert(self, scan: ScanResult) -> None:
@@ -379,13 +401,35 @@ class NewsTradingBot(commands.Bot):
             return
         import time
 
+        if not self._mosquito_automute.can_send():
+            await self._maybe_notify_mosquito_mute()
+            return
+
         now = time.time()
-        cooldown = self.settings.trading.realtime_scan_alert_cooldown_seconds
+        cooldown = self.settings.trading.mosquito_alert_cooldown_seconds
         if now - self._mosquito_recent.get(scan.symbol, 0) < cooldown:
             return
         content, embed = build_mosquito_alert(scan)
         await self._mosquito_channel.send(content=content, embed=embed)
         self._mosquito_recent[scan.symbol] = now
+        self._mosquito_automute.record_send()
+
+    async def _maybe_notify_mosquito_mute(self) -> None:
+        import time
+
+        if not self._mosquito_channel:
+            return
+        now = time.time()
+        if now - self._mosquito_mute_notice_at < 300:
+            return
+        remaining = self._mosquito_automute.muted_seconds_remaining
+        if remaining <= 0:
+            return
+        await self._mosquito_channel.send(
+            f"🔇 **Mosquito auto-muted** — too many alerts. Resuming in ~{remaining // 60 or 1} min."
+        )
+        self._mosquito_mute_notice_at = now
+        logger.info("Mosquito auto-muted for %ss", remaining)
 
     async def _send_realtime_alert(self, scan: ScanResult) -> None:
         await self._send_scan_alert(scan, title_prefix="Realtime Scanner")

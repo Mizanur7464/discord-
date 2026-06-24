@@ -51,6 +51,12 @@ trading:
   mosquito_volume_min_value: 1000000      # min labeled mosquito volume value to count as confirmation
   mosquito_min_relative_volume: 2.0       # RVol confirmation from mosquito card
   mosquito_volume_confirm_minutes: 60     # volume confirmation stays valid for this many minutes
+  mosquito_alerts_enabled: true           # post own scanner rows to #mosquito
+  mosquito_alert_cooldown_seconds: 600   # per-symbol mosquito cooldown (10 min)
+  mosquito_max_alerts_per_batch: 3       # top movers only each scan cycle
+  mosquito_automute_window_seconds: 90   # SPM-style auto-mute rolling window
+  mosquito_automute_max_alerts: 8        # max posts in window before mute
+  mosquito_automute_duration_seconds: 180  # mute length when too noisy
   watchlist_mode_enabled: true            # AI bullish news first goes to watchlist, then waits for breakout
   watchlist_days: 3                       # keep AI-filtered symbols for this many days
   watchlist_volume_increase_percent: 20   # enter when mosquito volume rises this much from baseline
