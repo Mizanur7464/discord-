@@ -848,14 +848,14 @@ class NewsTradingBot(commands.Bot):
         return trade_msg
 
     async def _send_watchlist_update(self, entry: WatchEntry, note: str) -> None:
-        channel = self._watchlist_channel or self._alert_channel
-        if not channel:
-            return
-        await channel.send(
-            f"👀 **Watchlist** `{entry.symbol}` — {note}\n"
-            f"News: {entry.title[:220]}\n"
-            f"AI: {entry.ai_reason}"
+        _ = note
+        volume_signal = self.volume_tracker.get_recent(entry.symbol)
+        scan = await self._scan_symbol(
+            entry.symbol,
+            mosquito_signal=volume_signal,
+            news_bullish=True,
         )
+        await self._send_scan_alert(scan, title_prefix="Watchlist")
 
     async def _process_watchlist_triggers(self, signals: list[VolumeSignal]) -> None:
         for signal in signals:
