@@ -14,8 +14,16 @@ STATE_FILE = Path(__file__).resolve().parents[2] / "data" / "benzinga_feed_state
 
 
 class BenzingaFeedPoller:
-    def __init__(self, *, api_key: str, page_size: int = 25, max_seen: int = 2000):
+    def __init__(
+        self,
+        *,
+        api_key: str,
+        provider: str = "massive",
+        page_size: int = 25,
+        max_seen: int = 2000,
+    ):
         self.api_key = api_key
+        self.provider = provider
         self.page_size = page_size
         self.max_seen = max_seen
         STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -41,7 +49,7 @@ class BenzingaFeedPoller:
         STATE_FILE.write_text(json.dumps({"seen_ids": ids}, indent=2), encoding="utf-8")
 
     def poll_new(self) -> list[BenzingaArticle]:
-        articles = fetch_recent_news(self.api_key, page_size=self.page_size)
+        articles = fetch_recent_news(self.api_key, page_size=self.page_size, provider=self.provider)
         fresh: list[BenzingaArticle] = []
         for article in reversed(articles):
             if article.article_id in self._seen_ids:

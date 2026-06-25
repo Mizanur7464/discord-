@@ -127,6 +127,7 @@ class SymbolScanner:
         get_latest_trade_price,
         data_provider: MarketDataProvider | None = None,
         benzinga_api_key: str = "",
+        benzinga_news_provider: str = "massive",
         finnhub_api_key: str = "",
         unusual_whales_api_key: str = "",
         peak_rvol_store: PeakRvolStore | None = None,
@@ -140,6 +141,7 @@ class SymbolScanner:
         self._get_latest_trade_price = get_latest_trade_price
         self._data_provider = data_provider
         self._benzinga_api_key = benzinga_api_key
+        self._benzinga_news_provider = benzinga_news_provider
         self._finnhub_api_key = finnhub_api_key
         self._unusual_whales_api_key = unusual_whales_api_key
         self._peak_rvol_store = peak_rvol_store or PeakRvolStore()
@@ -228,7 +230,9 @@ class SymbolScanner:
                 result.price = mosquito_signal.price
 
         if self.cfg.benzinga_enabled and self._benzinga_api_key:
-            result.catalyst = fetch_catalyst_sync(symbol, self._benzinga_api_key)
+            result.catalyst = fetch_catalyst_sync(
+                symbol, self._benzinga_api_key, provider=self._benzinga_news_provider
+            )
 
         if self.cfg.microstructure_enabled:
             try:

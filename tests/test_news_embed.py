@@ -1,30 +1,46 @@
 from bot.news.benzinga import BenzingaArticle
-from bot.discord_bot.news_embed import build_benzinga_news_line
+from bot.discord_bot.news_embed import build_benzinga_news_line, build_benzinga_news_post
 
 
-def test_benzinga_news_line_spm_mc_style():
+def test_benzinga_news_line_nuntio_style():
     article = BenzingaArticle(
         article_id="1",
-        title="VRAX - Virax Biolabs Group Limited Announces 1-for-25 Share Consolidation",
+        title="AMTD - L'OFFICIEL AMTD IDEA Sets 2026 Launch for L'OFFICIEL Taiwan",
         url="https://www.benzinga.com/news/example",
-        symbols=["VRAX"],
+        symbols=["AMTD"],
     )
-    line = build_benzinga_news_line(article, company_name="Virax Biolabs Group Limited")
-    assert "**VRAX** (Virax Biolabs Group Limited):" in line
-    assert "`1-for-25 Share Consolidation`" in line or "`Announces`" in line
+    line = build_benzinga_news_line(
+        article,
+        symbol="AMTD",
+        float_shares=42_500_000,
+        country_flag="🇫🇷",
+    )
+    assert "`42.5 M`" in line
+    assert "🇫🇷" in line
+    assert "`AMTD`" in line
+    assert "L'OFFICIEL AMTD IDEA" in line
     assert " - [Link](" in line
-    assert "`2.3 M`" not in line
-    assert "🇨🇳" not in line
+    assert "(AMTD)" not in line
 
 
-def test_benzinga_news_line_oris_style():
+def test_benzinga_news_post_multi_symbol_copy():
     article = BenzingaArticle(
         article_id="2",
-        title="ORIS - Oriental Rise Provides Update Regarding Nasdaq Delisting Decision",
+        title="L'OFFICIEL AMTD IDEA Sets 2026 Launch for L'OFFICIEL Taiwan",
         url="https://www.benzinga.com/news/example",
-        symbols=["ORIS"],
+        symbols=["AMTD", "HKD", "TGE"],
     )
-    line = build_benzinga_news_line(article, company_name="Oriental Rise")
-    assert "**ORIS** (Oriental Rise):" in line
-    assert "`Provides Update`" in line
-    assert "`Delisting`" in line
+    post = build_benzinga_news_post(
+        article,
+        symbol_rows=[
+            ("AMTD", 42_500_000, "🇫🇷"),
+            ("HKD", 117_000_000, "🇺🇸"),
+            ("TGE", 9_100_000, "🇺🇸"),
+        ],
+    )
+    lines = post.split("\n")
+    assert len(lines) == 3
+    assert "`AMTD`" in lines[0]
+    assert "`HKD`" in lines[1]
+    assert "`TGE`" in lines[2]
+    assert all(" - [Link](" in line for line in lines)

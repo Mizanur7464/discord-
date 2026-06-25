@@ -90,6 +90,7 @@ class NewsTradingBot(commands.Bot):
             get_latest_trade_price=self.trading_engine._get_latest_trade_price,
             data_provider=self.data_provider,
             benzinga_api_key=settings.benzinga_api_key,
+            benzinga_news_provider=settings.benzinga_news_provider,
             finnhub_api_key=settings.finnhub_api_key,
             unusual_whales_api_key=settings.unusual_whales_api_key,
             watchlist_symbols_fn=self._collect_scan_symbols,
@@ -98,7 +99,10 @@ class NewsTradingBot(commands.Bot):
         self.summary_publisher = SummaryPublisher()
         self.benzinga_feed: BenzingaFeedPoller | None = None
         if settings.benzinga_api_key and settings.news.benzinga_feed_enabled:
-            self.benzinga_feed = BenzingaFeedPoller(api_key=settings.benzinga_api_key)
+            self.benzinga_feed = BenzingaFeedPoller(
+                api_key=settings.benzinga_api_key,
+                provider=settings.benzinga_news_provider,
+            )
         self.realtime_scanner: RealtimeScanner | None = None
         if settings.trading.realtime_scanner_enabled:
             self.realtime_scanner = RealtimeScanner(
@@ -257,14 +261,32 @@ class NewsTradingBot(commands.Bot):
             return
         symbol = article.symbols[0] if article.symbols else ""
         if self._news_channel:
-            company_name = ""
-            if symbol and self.settings.finnhub_api_key:
-                from bot.trading.market_data import fetch_company_profile_sync
-
-                company_name, _ = await asyncio.to_thread(
-                    fetch_company_profile_sync, symbol, self.settings.finnhub_api_key
+            symbol_rows: list[tuple[str, float | None, str]] = []
+            symbols = article.symbols or [""]
+            if self.settings.finnhub_api_key:
+                from bot.trading.market_data import (
+                    fetch_company_profile_sync,
+                    fetch_float_shares_sync,
                 )
-            content = build_benzinga_news_post(article, company_name=company_name)
+
+                for symbol in symbols:
+                    if not symbol:
+                        symbol_rows.append(("", None, "🇺🇸"))
+                        continue
+                    float_shares, profile = await asyncio.gather(
+                        asyncio.to_thread(
+                            fetch_float_shares_sync, symbol, self.settings.finnhub_api_key
+                        ),
+                        asyncio.to_thread(
+                            fetch_company_profile_sync, symbol, self.settings.finnhub_api_key
+                        ),
+                    )
+                    _, country_flag = profile
+                    symbol_rows.append((symbol, float_shares, country_flag or "🇺🇸"))
+            else:
+                symbol_rows = [(symbol, None, "🇺🇸") for symbol in symbols]
+
+            content = build_benzinga_news_post(article, symbol_rows=symbol_rows)
             await self._news_channel.send(content, suppress_embeds=True)
 
         text = article.title if not article.body else f"{article.title}\n{article.body[:4000]}"

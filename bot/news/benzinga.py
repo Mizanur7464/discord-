@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass, field
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
 logger = logging.getLogger(__name__)
@@ -46,7 +46,7 @@ def _news_items_from_payload(payload) -> list[dict]:
     if isinstance(payload, list):
         return [item for item in payload if isinstance(item, dict)]
     if isinstance(payload, dict):
-        for key in ("news", "data", "articles"):
+        for key in ("results", "news", "data", "articles"):
             items = payload.get(key)
             if isinstance(items, list):
                 return [item for item in items if isinstance(item, dict)]
@@ -89,27 +89,39 @@ def parse_benzinga_article(item: dict) -> BenzingaArticle | None:
     )
 
 
-def _fetch_news_payload(api_key: str, *, symbols: str = "", page_size: int = 25) -> list[dict]:
-    query = (
-        f"https://api.benzinga.com/api/v2/news"
-        f"?token={quote(api_key)}&pageSize={page_size}&displayOutput=full"
-    )
-    if symbols:
-        query += f"&symbols={quote(symbols.upper())}"
+def _fetch_news_payload(
+    api_key: str,
+    *,
+    symbols: str = "",
+    page_size: int = 25,
+    provider: str = "massive",
+) -> list[dict]:
+    if provider == "direct":
+        query = (
+            f"https://api.benzinga.com/api/v2/news"
+            f"?token={quote(api_key)}&pageSize={page_size}&displayOutput=full"
+        )
+        if symbols:
+            query += f"&tickers={quote(symbols.upper())}"
+    else:
+        params: dict[str, str | int] = {"apiKey": api_key, "limit": page_size}
+        if symbols:
+            params["tickers"] = symbols.upper()
+        query = f"https://api.massive.com/benzinga/v2/news?{urlencode(params)}"
     with urlopen(Request(query, headers={"Accept": "application/json", "User-Agent": "discord-news-bot/1.0"}), timeout=15) as resp:
         raw = resp.read().decode("utf-8", errors="ignore")
     if raw.lstrip().startswith("<"):
-        logger.warning("Benzinga returned non-JSON news payload")
+        logger.warning("Benzinga news API returned non-JSON payload")
         return []
     payload = json.loads(raw)
     return _news_items_from_payload(payload)
 
 
-def fetch_recent_news(api_key: str, *, page_size: int = 25) -> list[BenzingaArticle]:
+def fetch_recent_news(api_key: str, *, page_size: int = 25, provider: str = "massive") -> list[BenzingaArticle]:
     if not api_key:
         return []
     try:
-        items = _fetch_news_payload(api_key, page_size=page_size)
+        items = _fetch_news_payload(api_key, page_size=page_size, provider=provider)
         articles = [parse_benzinga_article(item) for item in items]
         return [article for article in articles if article]
     except Exception as exc:
@@ -158,11 +170,11 @@ def parse_benzinga_payload(symbol: str, payload) -> CatalystResult | None:
     )
 
 
-def fetch_catalyst_sync(symbol: str, api_key: str) -> CatalystResult | None:
+def fetch_catalyst_sync(symbol: str, api_key: str, *, provider: str = "massive") -> CatalystResult | None:
     if not api_key:
         return None
     try:
-        items = _fetch_news_payload(api_key, symbols=symbol.upper(), page_size=3)
+        items = _fetch_news_payload(api_key, symbols=symbol.upper(), page_size=3, provider=provider)
         return parse_benzinga_payload(symbol, items)
     except Exception as exc:
         logger.warning("Benzinga catalyst lookup failed for %s: %s", symbol, exc)

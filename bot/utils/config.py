@@ -162,8 +162,22 @@ class Settings:
     alpaca_secret_key: str
     alpaca_paper: bool
     benzinga_api_key: str = ""
+    benzinga_news_provider: str = "massive"
     finnhub_api_key: str = ""
     unusual_whales_api_key: str = ""
+
+
+def _resolve_benzinga_credentials() -> tuple[str, str]:
+    massive_key = os.getenv("MASSIVE_API_KEY", "").strip()
+    direct_key = os.getenv("BENZINGA_API_KEY", "").strip()
+    provider = os.getenv("BENZINGA_NEWS_PROVIDER", "").strip().lower()
+    if provider == "direct":
+        return direct_key, "direct"
+    if provider == "massive":
+        return massive_key or direct_key, "massive"
+    if massive_key:
+        return massive_key, "massive"
+    return direct_key, "direct" if direct_key else "massive"
 
 
 def _parse_exit_tiers(raw: list | None) -> list[ExitTier]:
@@ -223,6 +237,7 @@ def load_settings() -> Settings:
     forward_sources = os.getenv("FORWARD_SOURCE_CHANNEL_IDS", "").strip()
     forward_dest = os.getenv("FORWARD_DEST_CHANNEL_ID", "").strip()
     forward_map_raw = os.getenv("FORWARD_CHANNEL_MAP", "").strip()
+    benzinga_api_key, benzinga_news_provider = _resolve_benzinga_credentials()
 
     if not source_channels and forward_dest:
         source_channels = forward_dest
@@ -264,7 +279,7 @@ def load_settings() -> Settings:
             openai_api_key=os.getenv("OPENAI_API_KEY", "").strip(),
             benzinga_feed_enabled=news_raw.get(
                 "benzinga_feed_enabled",
-                bool(os.getenv("BENZINGA_API_KEY", "").strip()),
+                bool(benzinga_api_key),
             ),
             benzinga_poll_interval_seconds=int(news_raw.get("benzinga_poll_interval_seconds", 20)),
         ),
@@ -383,7 +398,8 @@ def load_settings() -> Settings:
         alpaca_api_key=os.getenv("ALPACA_API_KEY", "").strip(),
         alpaca_secret_key=os.getenv("ALPACA_SECRET_KEY", "").strip(),
         alpaca_paper=os.getenv("ALPACA_PAPER", "true").strip().lower() == "true",
-        benzinga_api_key=os.getenv("BENZINGA_API_KEY", "").strip(),
+        benzinga_api_key=benzinga_api_key,
+        benzinga_news_provider=benzinga_news_provider,
         finnhub_api_key=os.getenv("FINNHUB_API_KEY", "").strip(),
         unusual_whales_api_key=os.getenv("UNUSUAL_WHALES_API_KEY", "").strip(),
     )
