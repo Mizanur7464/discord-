@@ -307,11 +307,11 @@ def load_settings() -> Settings:
         ),
         news=NewsConfig(
             source_channel_ids=_parse_channel_ids(source_channels),
-            allowed_url_domains=news_raw.get("allowed_url_domains", ["news.nuntiobot.com"]),
+            allowed_url_domains=news_raw.get("allowed_url_domains", ["benzinga.com", "www.benzinga.com"]),
             process_all_messages=news_raw.get("process_all_messages", False),
             always_process_urls=news_raw.get("always_process_urls", True),
             alert_all_news=news_raw.get("alert_all_news", True),
-            trusted_news_bots=news_raw.get("trusted_news_bots", ["nuntio"]),
+            trusted_news_bots=news_raw.get("trusted_news_bots", []),
             ai_sentiment_enabled=news_raw.get("ai_sentiment_enabled", True),
             openai_model=news_raw.get("openai_model", "gpt-4o-mini"),
             openai_api_key=os.getenv("OPENAI_API_KEY", "").strip(),

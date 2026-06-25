@@ -12,8 +12,7 @@ news:
   alert_all_news: true          # post every forwarded news to #alerts (including neutral)
   process_all_messages: false
   always_process_urls: false
-  trusted_news_bots:           # bot usernames allowed to post in news channel (substring match)
-    - nuntio
+  trusted_news_bots: []          # no external news bots — Massive Benzinga API is the only source
   ai_sentiment_enabled: true    # all buy/ignore/neutral signals decided by OpenAI
   openai_model: gpt-4o-mini
   benzinga_feed_enabled: true   # licensed news from Benzinga API (replaces NB news)
@@ -22,8 +21,6 @@ news:
   reader_port: 8787
 
   allowed_url_domains:
-    - news.nuntiobot.com
-    - nuntiobot.com
     - benzinga.com
     - www.benzinga.com
 
