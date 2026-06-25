@@ -139,6 +139,53 @@ def fetch_recent_news(api_key: str, *, page_size: int = 25, provider: str = "mas
         return []
 
 
+def _article_id_matches(item: dict, article_id: str) -> bool:
+    target = str(article_id or "").strip()
+    if not target:
+        return False
+    for key in ("id", "benzinga_id", "article_id"):
+        value = item.get(key)
+        if value is not None and str(value).strip() == target:
+            return True
+    return False
+
+
+def fetch_article_by_id(
+    api_key: str,
+    article_id: str,
+    *,
+    provider: str = "massive",
+) -> BenzingaArticle | None:
+    if not api_key or not str(article_id or "").strip():
+        return None
+    article_id = str(article_id).strip()
+    try:
+        if provider == "massive":
+            params: dict[str, str | int] = {
+                "apiKey": api_key,
+                "limit": 1,
+                "ids": article_id,
+            }
+            query = f"https://api.massive.com/benzinga/v2/news?{urlencode(params)}"
+            with urlopen(
+                Request(query, headers={"Accept": "application/json", "User-Agent": "discord-news-bot/1.0"}),
+                timeout=15,
+            ) as resp:
+                raw = resp.read().decode("utf-8", errors="ignore")
+            if not raw.lstrip().startswith("<"):
+                payload = json.loads(raw)
+                for item in _news_items_from_payload(payload):
+                    if _article_id_matches(item, article_id):
+                        return parse_benzinga_article(item)
+        items = _fetch_news_payload(api_key, page_size=100, provider=provider)
+        for item in items:
+            if _article_id_matches(item, article_id):
+                return parse_benzinga_article(item)
+    except Exception as exc:
+        logger.warning("Benzinga article lookup failed for %s: %s", article_id, exc)
+    return None
+
+
 @dataclass
 class CatalystResult:
     symbol: str

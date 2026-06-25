@@ -10,6 +10,9 @@ from discord.ext import commands
 
 from bot.news.analyzer import MessageAnalyzer, NewsItem
 from bot.news.benzinga_feed import BenzingaFeedPoller
+from bot.news.reader_server import NewsReaderServer
+from bot.news.reader_store import NewsReaderStore
+from bot.news.reader_urls import reader_article_url
 from bot.news.mosquito_vision import analyze_mosquito_image_urls
 from bot.news.symbols import extract_nuntio_headline, extract_stock_symbol, split_news_blocks
 from bot.news.url_fetcher import UrlFetchError, extract_urls, fetch_article, is_allowed_url
@@ -106,6 +109,16 @@ class NewsTradingBot(commands.Bot):
         self.benzinga_feed: BenzingaFeedPoller | None = None
         if settings.benzinga_api_key and settings.news.benzinga_feed_enabled:
             self.benzinga_feed = BenzingaFeedPoller(
+                api_key=settings.benzinga_api_key,
+                provider=settings.benzinga_news_provider,
+            )
+        self.news_reader_store: NewsReaderStore | None = None
+        self.news_reader_server: NewsReaderServer | None = None
+        if settings.news.reader_enabled and settings.benzinga_api_key:
+            self.news_reader_store = NewsReaderStore()
+            self.news_reader_server = NewsReaderServer(
+                store=self.news_reader_store,
+                port=settings.news.reader_port,
                 api_key=settings.benzinga_api_key,
                 provider=settings.benzinga_news_provider,
             )
@@ -255,6 +268,17 @@ class NewsTradingBot(commands.Bot):
             self._background_tasks.append(asyncio.create_task(self._summary_loop()))
         if self.benzinga_feed:
             self._background_tasks.append(asyncio.create_task(self._benzinga_feed_loop()))
+        if self.news_reader_server:
+            self._background_tasks.append(asyncio.create_task(self.news_reader_server.start()))
+
+    def _reader_base_url(self) -> str:
+        if self.settings.news.reader_enabled and self.settings.news.reader_base_url:
+            return self.settings.news.reader_base_url
+        return ""
+
+    def _article_public_url(self, article) -> str:
+        reader_url = reader_article_url(self._reader_base_url(), getattr(article, "article_id", ""))
+        return reader_url or getattr(article, "url", "") or ""
 
     async def _benzinga_feed_loop(self) -> None:
         if not self.benzinga_feed:
@@ -305,14 +329,20 @@ class NewsTradingBot(commands.Bot):
 
         if not isinstance(article, BenzingaArticle) or not self._news_channel:
             return
+        if self.news_reader_store:
+            await asyncio.to_thread(self.news_reader_store.save, article)
         symbols = article.symbols or [""]
         try:
             symbol_rows = await asyncio.wait_for(self._benzinga_symbol_rows(symbols), timeout=5.0)
         except TimeoutError:
             logger.warning("Benzinga news metadata timeout for %s", symbols)
             symbol_rows = [(symbol, None, "🇺🇸") for symbol in symbols]
-            content = build_benzinga_news_post(article, symbol_rows=symbol_rows)
-            await self._news_channel.send(content, suppress_embeds=True)
+        content = build_benzinga_news_post(
+            article,
+            symbol_rows=symbol_rows,
+            reader_base_url=self._reader_base_url(),
+        )
+        await self._news_channel.send(content, suppress_embeds=True)
         for symbol in article.symbols:
             await self._maybe_send_potential_hit(symbol, article)
 
@@ -328,7 +358,7 @@ class NewsTradingBot(commands.Bot):
             source="Benzinga",
             published=article.published or "Benzinga",
             message_id=f"bz:{article.article_id}",
-            jump_url=article.url,
+            jump_url=self._article_public_url(article),
             headline=article.title,
             timing_key=f"bz:{article.article_id}",
         )
@@ -584,7 +614,7 @@ class NewsTradingBot(commands.Bot):
         entry = self.potential_store.attach_news(
             symbol,
             title=article.title,
-            url=article.url,
+            url=self._article_public_url(article),
         )
         if not entry or not self._alert_channel:
             return
@@ -596,7 +626,7 @@ class NewsTradingBot(commands.Bot):
                 f"**{article.title[:900]}**"
             ),
             color=discord.Color.green(),
-            url=article.url or None,
+            url=self._article_public_url(article) or None,
         )
         embed.add_field(name="Potential Score", value=f"{entry.grade} {entry.score}/100", inline=True)
         if entry.session_change_pct is not None:

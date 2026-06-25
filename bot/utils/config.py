@@ -30,6 +30,9 @@ class NewsConfig:
     openai_api_key: str = ""
     benzinga_feed_enabled: bool = False
     benzinga_poll_interval_seconds: int = 15
+    reader_enabled: bool = True
+    reader_port: int = 8787
+    reader_base_url: str = ""
 
 
 @dataclass
@@ -177,6 +180,13 @@ class Settings:
     unusual_whales_api_key: str = ""
 
 
+def _resolve_reader_base_url(port: int) -> str:
+    explicit = os.getenv("NEWS_READER_BASE_URL", "").strip()
+    if explicit:
+        return explicit.rstrip("/")
+    return f"http://127.0.0.1:{port}"
+
+
 def _resolve_benzinga_credentials() -> tuple[str, str]:
     massive_key = os.getenv("MASSIVE_API_KEY", "").strip()
     direct_key = os.getenv("BENZINGA_API_KEY", "").strip()
@@ -276,6 +286,16 @@ def load_settings() -> Settings:
     forward_dest_id = int(forward_dest) if forward_dest else (source_channel_ids[0] if source_channel_ids else 0)
     forward_dest_map = _parse_channel_map(forward_map_raw)
 
+    reader_port = int(news_raw.get("reader_port", os.getenv("NEWS_READER_PORT", "8787") or 8787))
+    reader_enabled_env = os.getenv("NEWS_READER_ENABLED", "").strip().lower()
+    if reader_enabled_env in {"0", "false", "no", "off"}:
+        reader_enabled = False
+    elif reader_enabled_env in {"1", "true", "yes", "on"}:
+        reader_enabled = True
+    else:
+        reader_enabled = bool(news_raw.get("reader_enabled", bool(benzinga_api_key)))
+    reader_base_url = _resolve_reader_base_url(reader_port) if reader_enabled else ""
+
     return Settings(
         bot=BotConfig(**raw["bot"]),
         news=NewsConfig(
@@ -293,6 +313,9 @@ def load_settings() -> Settings:
                 bool(benzinga_api_key),
             ),
             benzinga_poll_interval_seconds=int(news_raw.get("benzinga_poll_interval_seconds", 15)),
+            reader_enabled=reader_enabled,
+            reader_port=reader_port,
+            reader_base_url=reader_base_url,
         ),
         trading=TradingConfig(
             enabled=trading_raw["enabled"],

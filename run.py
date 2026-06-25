@@ -66,6 +66,9 @@ def main() -> None:
         if settings.forwarder.source_channel_ids:
             print(f"   Forward from: {settings.forwarder.source_channel_ids}")
             print(f"   Forward to: {settings.forwarder.dest_channel_id}")
+    if settings.news.reader_enabled:
+        reader_url = settings.news.reader_base_url or f"http://127.0.0.1:{settings.news.reader_port}"
+        print(f"   News reader: {reader_url}")
     print("   Press Ctrl+C to stop\n")
 
     forwarder = None

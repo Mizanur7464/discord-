@@ -8,6 +8,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from bot.news.benzinga import BenzingaArticle
+from bot.news.reader_urls import reader_article_url
 
 _ET = ZoneInfo("America/New_York")
 
@@ -60,6 +61,7 @@ def build_benzinga_news_line(
     country_flag: str = "",
     company_name: str = "",
     link_mode: str = "article",
+    reader_base_url: str = "",
 ) -> str:
     """Nuntio row: **01:52 PM ET** | `42.5 M` 🇺🇸 **TICKER**: headline - Link."""
     _ = company_name
@@ -88,10 +90,13 @@ def build_benzinga_news_line(
     else:
         line = row
 
-    link = article.url
-    if link_mode == "quote" and symbol:
-        # Multi-ticker posts: each row should navigate to the correct symbol page.
+    reader_link = reader_article_url(reader_base_url, article.article_id)
+    if reader_link:
+        link = reader_link
+    elif link_mode == "quote" and symbol:
         link = f"https://www.benzinga.com/quote/{symbol}"
+    else:
+        link = article.url
     if link:
         line = f"{line} - [Link]({link})" if line else f"[Link]({link})"
     return line[:2000]
@@ -101,10 +106,11 @@ def build_benzinga_news_post(
     article: BenzingaArticle,
     *,
     symbol_rows: list[tuple[str, float | None, str]] | None = None,
+    reader_base_url: str = "",
     **kwargs,
 ) -> str:
     if symbol_rows:
-        link_mode = "quote" if len(symbol_rows) > 1 else "article"
+        link_mode = "quote" if len(symbol_rows) > 1 and not reader_base_url else "article"
         lines = [
             build_benzinga_news_line(
                 article,
@@ -112,9 +118,10 @@ def build_benzinga_news_post(
                 float_shares=float_shares,
                 country_flag=country_flag,
                 link_mode=link_mode,
+                reader_base_url=reader_base_url,
                 **kwargs,
             )
             for symbol, float_shares, country_flag in symbol_rows
         ]
         return "\n".join(line for line in lines if line)
-    return build_benzinga_news_line(article, **kwargs)
+    return build_benzinga_news_line(article, reader_base_url=reader_base_url, **kwargs)

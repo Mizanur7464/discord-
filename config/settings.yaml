@@ -17,6 +17,8 @@ news:
   openai_model: gpt-4o-mini
   benzinga_feed_enabled: true   # licensed news from Benzinga API (replaces NB news)
   benzinga_poll_interval_seconds: 15   # poll Massive Benzinga news (was 20)
+  reader_enabled: true           # serve paywall-free article pages from API cache
+  reader_port: 8787
 
   allowed_url_domains:
     - news.nuntiobot.com
