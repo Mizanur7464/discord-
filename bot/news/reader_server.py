@@ -9,7 +9,7 @@ from aiohttp import web
 
 from bot.news.benzinga import BenzingaArticle, fetch_article_by_id
 from bot.news.reader_html import render_article_page, render_not_found_page
-from bot.news.reader_store import NewsReaderStore
+from bot.utils.config import DEFAULT_BOT_NAME
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +28,7 @@ class NewsReaderServer:
         self.port = max(1024, int(port))
         self.api_key = api_key
         self.provider = provider
-        self.brand_name = brand_name or "News Trading Bot"
+        self.brand_name = brand_name or DEFAULT_BOT_NAME
         self._runner: web.AppRunner | None = None
         self._site: web.TCPSite | None = None
 

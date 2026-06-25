@@ -5,7 +5,7 @@
 
 bot:
   command_prefix: "!"
-  name: "News Trading Bot"
+  name: "Quantiqo"
   auto_start: true
 
 news:

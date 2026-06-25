@@ -15,6 +15,7 @@ from bot.trading.scanner_profiles import ScannerProfile, load_profiles_from_conf
 ROOT_DIR = Path(__file__).resolve().parents[2]
 CONFIG_PATH = ROOT_DIR / "config" / "settings.yaml"
 ENV_PATH = ROOT_DIR / ".env"
+DEFAULT_BOT_NAME = "Quantiqo"
 
 
 @dataclass
@@ -143,7 +144,7 @@ class TradingConfig:
 @dataclass
 class BotConfig:
     command_prefix: str
-    name: str = "News Trading Bot"
+    name: str = DEFAULT_BOT_NAME
     auto_start: bool = True
 
 
@@ -296,12 +297,12 @@ def load_settings() -> Settings:
     else:
         reader_enabled = bool(news_raw.get("reader_enabled", bool(benzinga_api_key)))
     reader_base_url = _resolve_reader_base_url(reader_port) if reader_enabled else ""
-    bot_name = os.getenv("BOT_NAME", "").strip() or str(raw["bot"].get("name", "News Trading Bot")).strip()
+    bot_name = os.getenv("BOT_NAME", "").strip() or str(raw["bot"].get("name", DEFAULT_BOT_NAME)).strip()
 
     return Settings(
         bot=BotConfig(
             command_prefix=raw["bot"]["command_prefix"],
-            name=bot_name or "News Trading Bot",
+            name=bot_name or DEFAULT_BOT_NAME,
             auto_start=raw["bot"].get("auto_start", True),
         ),
         news=NewsConfig(

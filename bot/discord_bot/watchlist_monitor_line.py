@@ -143,5 +143,6 @@ class ScanDetailView(discord.ui.View):
             title_prefix=self._title_prefix,
             related_news_title=title or self._related_news_title,
             related_news_url=url or self._related_news_url,
+            bot_name=self._bot.settings.bot.name,
         )
         await interaction.followup.send(embed=embed, ephemeral=True)

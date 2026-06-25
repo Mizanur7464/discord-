@@ -95,7 +95,11 @@ def build_scan_embed(
     title_prefix: str = "Realtime Scanner",
     related_news_title: str = "",
     related_news_url: str = "",
+    bot_name: str = "",
 ) -> discord.Embed:
+    from bot.utils.config import DEFAULT_BOT_NAME
+
+    brand = bot_name or DEFAULT_BOT_NAME
     actionable = scan.score >= min_score
     status = "✅ Actionable setup" if actionable else f"⏸ Below threshold ({min_score})"
     color = _grade_color(scan.grade, actionable=actionable)
@@ -208,7 +212,7 @@ def build_scan_embed(
     if entry_lines:
         embed.add_field(name="🎯 Entry", value="\n".join(entry_lines)[:1024], inline=False)
 
-    tags = ["Real-Time Scanner", "Watchlists", "Alert System"]
+    tags = [brand, "Real-Time Scanner", "Watchlists"]
     if scan.is_repeat_runner:
         tags.append("Runner Intelligence")
     embed.set_footer(text=" · ".join(tags))

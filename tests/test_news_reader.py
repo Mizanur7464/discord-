@@ -25,10 +25,9 @@ def test_news_embed_uses_reader_link_for_multi_symbol():
             ("HKD", 117_000_000, "🇺🇸"),
         ],
         reader_base_url="http://news.example.com",
-        link_label="Dolcettoo Bot",
     )
     assert "http://news.example.com/n/44577082" in post
-    assert "[Dolcettoo Bot]" in post
+    assert "[Link]" in post
     assert "benzinga.com/quote/" not in post
 
 
@@ -58,8 +57,8 @@ def test_render_article_page_includes_body():
         symbols=["AMTD"],
         published="2026-06-25T17:52:00Z",
     )
-    html = render_article_page(article, brand_name="Dolcettoo Bot")
+    html = render_article_page(article, brand_name="Quantiqo")
     assert "L&#x27;OFFICIEL AMTD IDEA Sets 2026 Launch" in html
     assert "Launch details here." in html
     assert "AMTD" in html
-    assert "Dolcettoo Bot" in html
+    assert "Quantiqo" in html

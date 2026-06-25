@@ -7,6 +7,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from bot.news.benzinga import BenzingaArticle
+from bot.utils.config import DEFAULT_BOT_NAME
 
 _ET = ZoneInfo("America/New_York")
 
@@ -31,7 +32,7 @@ def _article_body_html(article: BenzingaArticle) -> str:
 def render_article_page(article: BenzingaArticle, *, brand_name: str = "") -> str:
     title = html.escape(article.title)
     published = html.escape(_format_published_et(article.published))
-    brand = html.escape(brand_name or "News Trading Bot")
+    brand = html.escape(brand_name or DEFAULT_BOT_NAME)
     symbols = " ".join(
         f'<a class="ticker" href="https://www.benzinga.com/quote/{html.escape(symbol)}">{html.escape(symbol)}</a>'
         for symbol in article.symbols[:8]
@@ -134,7 +135,7 @@ def render_article_page(article: BenzingaArticle, *, brand_name: str = "") -> st
 
 def render_not_found_page(article_id: str, *, brand_name: str = "") -> str:
     safe_id = html.escape(article_id)
-    brand = html.escape(brand_name or "News Trading Bot")
+    brand = html.escape(brand_name or DEFAULT_BOT_NAME)
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>

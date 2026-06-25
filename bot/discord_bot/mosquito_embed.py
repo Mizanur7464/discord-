@@ -87,7 +87,10 @@ def et_now() -> datetime:
     return datetime.now(_ET)
 
 
-def build_mosquito_alert(scan: ScanResult) -> tuple[str, discord.Embed]:
+def build_mosquito_alert(scan: ScanResult, *, bot_name: str = "") -> tuple[str, discord.Embed]:
+    from bot.utils.config import DEFAULT_BOT_NAME
+
+    brand = bot_name or DEFAULT_BOT_NAME
     """Return SPM-style ANSI row + small embed for Discord timestamp."""
     now_et = et_now()
     content = f"```ansi\n{_format_spm_row(scan)}\n```"
@@ -95,7 +98,7 @@ def build_mosquito_alert(scan: ScanResult) -> tuple[str, discord.Embed]:
     color = discord.Color.from_rgb(87, 242, 135) if pct >= 0 else discord.Color.from_rgb(237, 66, 69)
     embed = discord.Embed(color=color)
     embed.timestamp = datetime.now(_ET)
-    embed.set_footer(text=f"🦟 {now_et.strftime('%I:%M:%S %p')} ET · Own scanner")
+    embed.set_footer(text=f"🦟 {now_et.strftime('%I:%M:%S %p')} ET · {brand}")
     return content, embed
 
 

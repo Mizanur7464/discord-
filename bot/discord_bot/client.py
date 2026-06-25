@@ -342,7 +342,6 @@ class NewsTradingBot(commands.Bot):
             article,
             symbol_rows=symbol_rows,
             reader_base_url=self._reader_base_url(),
-            link_label=self.settings.bot.name,
         )
         await self._news_channel.send(content, suppress_embeds=True)
         for symbol in article.symbols:
@@ -633,7 +632,7 @@ class NewsTradingBot(commands.Bot):
         embed.add_field(name="Potential Score", value=f"{entry.grade} {entry.score}/100", inline=True)
         if entry.session_change_pct is not None:
             embed.add_field(name="Move at flag", value=f"{entry.session_change_pct:+.1f}%", inline=True)
-        embed.set_footer(text="Potential channel → news match · bot accuracy")
+        embed.set_footer(text=f"{self.settings.bot.name} · potential match")
         await self._alert_channel.send(embed=embed)
         logger.info("Potential HIT alert for %s", symbol)
 
@@ -701,7 +700,7 @@ class NewsTradingBot(commands.Bot):
         cooldown = self.settings.trading.mosquito_alert_cooldown_seconds
         if now - self._mosquito_recent.get(scan.symbol, 0) < cooldown:
             return
-        content, embed = build_mosquito_alert(scan)
+        content, embed = build_mosquito_alert(scan, bot_name=self.settings.bot.name)
         await self._mosquito_channel.send(content=content, embed=embed)
         self._mosquito_recent[scan.symbol] = now
         self._mosquito_automute.record_send()
@@ -1342,7 +1341,9 @@ class NewsTradingBot(commands.Bot):
         if item.daily_volume is not None:
             embed.add_field(name="Volume", value=f"{item.daily_volume:,} daily", inline=True)
         if self.analyzer.config.ai_sentiment_enabled and self.analyzer.config.openai_api_key:
-            embed.set_footer(text="Analysis: OpenAI AI")
+            embed.set_footer(text=f"{self.settings.bot.name} · OpenAI analysis")
+        else:
+            embed.set_footer(text=self.settings.bot.name)
         if item.stock_symbol:
             embed.add_field(name="Symbol", value=item.stock_symbol, inline=True)
         embed.add_field(name="Published", value=item.published, inline=False)
@@ -1366,7 +1367,7 @@ class BotCommands(commands.Cog):
     @discord.app_commands.command(name="help", description="Show all commands")
     async def help_cmd(self, interaction: discord.Interaction) -> None:
         embed = discord.Embed(
-            title="📖 Command List",
+            title=f"📖 {self.bot.settings.bot.name} Commands",
             description="Use the commands below:",
             color=discord.Color.blue(),
         )
@@ -1388,7 +1389,7 @@ class BotCommands(commands.Cog):
         for name, desc in commands_list:
             embed.add_field(name=name, value=desc, inline=False)
 
-        embed.set_footer(text="Edit settings in config/settings.yaml and .env")
+        embed.set_footer(text=f"{self.bot.settings.bot.name} · /help for commands")
         await interaction.response.send_message(embed=embed)
 
     @discord.app_commands.command(name="status", description="Show bot status")
@@ -1397,7 +1398,7 @@ class BotCommands(commands.Cog):
         trade_status = self.bot.trading_engine.get_status()
         source_channels = ", ".join(str(cid) for cid in self.bot.settings.news.source_channel_ids)
 
-        embed = discord.Embed(title="🤖 Bot Status", color=discord.Color.blue())
+        embed = discord.Embed(title=f"🤖 {self.bot.settings.bot.name} Status", color=discord.Color.blue())
         embed.add_field(name="Monitoring", value=monitoring, inline=True)
         embed.add_field(name="Source channels", value=source_channels, inline=True)
         embed.add_field(name="Alert channel", value=str(self.bot.settings.alert_channel_id), inline=True)
@@ -1411,6 +1412,7 @@ class BotCommands(commands.Cog):
             inline=False,
         )
 
+        embed.set_footer(text=self.bot.settings.bot.name)
         await interaction.response.send_message(embed=embed)
 
     @discord.app_commands.command(name="start", description="Start news monitoring")
@@ -1478,6 +1480,7 @@ class BotCommands(commands.Cog):
                 scan,
                 min_score=self.bot._scanner_min_score(scan),
                 title_prefix="Scanner",
+                bot_name=self.bot.settings.bot.name,
             )
         )
 
@@ -1533,6 +1536,7 @@ class BotCommands(commands.Cog):
                     scan,
                     min_score=self.bot._scanner_min_score(scan),
                     title_prefix="Market Scan",
+                    bot_name=self.bot.settings.bot.name,
                 )
                 for scan in actionable
             ],
