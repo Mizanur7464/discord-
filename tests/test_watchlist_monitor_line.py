@@ -28,3 +28,13 @@ def test_watchlist_monitor_line_nb_style():
     assert "**Float:** 11.8 M" in line
     assert "**RVol:** 40x" in line
     assert "**Score:**" in line
+    assert "[Link]" not in line
+
+
+def test_watchlist_monitor_line_blue_text_link():
+    scan = _scan(symbol="WYY", price=6.5, session_change_pct=12.0, score=70, grade="B")
+    line = build_watchlist_monitor_line(
+        scan,
+        news_url="http://82.197.66.62:8787/n/12345",
+    )
+    assert " - [Link](http://82.197.66.62:8787/n/12345)" in line

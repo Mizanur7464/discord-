@@ -61,7 +61,12 @@ def format_monitor_clock(now: datetime | None = None) -> str:
     return clock
 
 
-def build_watchlist_monitor_line(scan: ScanResult, *, country_flag: str = "🇺🇸") -> str:
+def build_watchlist_monitor_line(
+    scan: ScanResult,
+    *,
+    country_flag: str = "🇺🇸",
+    news_url: str = "",
+) -> str:
     """Compact NB / nuntio-std monitoring list row."""
     clock = format_monitor_clock()
     rank = scan.liquidity_rank or scan.peak_rvol_rank
@@ -93,7 +98,10 @@ def build_watchlist_monitor_line(scan: ScanResult, *, country_flag: str = "🇺�
         fields.append(f"**Theme:** [{scan.catalyst_label}]")
     fields.append(f"**Score:** {scan.grade} {scan.score}/100")
 
-    return f"{head} | " + " | ".join(fields)
+    line = f"{head} | " + " | ".join(fields)
+    if news_url:
+        line = f"{line} - [Link]({news_url})"
+    return line
 
 
 class ScanDetailView(discord.ui.View):
@@ -114,10 +122,6 @@ class ScanDetailView(discord.ui.View):
         self._title_prefix = title_prefix
         self._related_news_title = related_news_title
         self._related_news_url = related_news_url
-        if related_news_url:
-            self.add_item(
-                discord.ui.Button(label="Link", style=discord.ButtonStyle.link, url=related_news_url)
-            )
 
     @discord.ui.button(label="Details", style=discord.ButtonStyle.secondary)
     async def show_details(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
