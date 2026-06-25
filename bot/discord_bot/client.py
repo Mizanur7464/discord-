@@ -29,6 +29,7 @@ from bot.discord_bot.mosquito_automute import MosquitoAutoMute
 from bot.discord_bot.mosquito_embed import build_mosquito_alert
 from bot.discord_bot.news_embed import build_benzinga_news_post
 from bot.discord_bot.scan_embed import build_scan_embed, format_scan_summary, _resolve_min_score
+from bot.discord_bot.watchlist_monitor_line import ScanDetailView, build_watchlist_monitor_line
 from bot.discord_bot.summary_publisher import SummaryPublisher
 from bot.forwarder.client import SessionForwarder
 
@@ -130,6 +131,7 @@ class NewsTradingBot(commands.Bot):
             mute_seconds=cfg.mosquito_automute_duration_seconds,
         )
         self._mosquito_mute_notice_at: float = 0.0
+        self._scan_detail_cache: dict[str, tuple[ScanResult, int]] = {}
         self._processed_messages: set[str] = set()
 
     def _is_news_author(self, message: discord.Message) -> bool:
@@ -378,12 +380,20 @@ class NewsTradingBot(commands.Bot):
         channel = self._watchlist_channel or self._alert_channel
         if not channel:
             return
-        embed = build_scan_embed(
-            scan,
-            min_score=self._scanner_min_score(scan),
-            title_prefix=title_prefix,
-        )
-        await channel.send(embed=embed)
+        min_score = self._scanner_min_score(scan)
+        self._scan_detail_cache[scan.symbol.upper()] = (scan, min_score)
+
+        country_flag = "🇺🇸"
+        if scan.symbol and self.settings.finnhub_api_key:
+            from bot.trading.market_data import fetch_company_profile_sync
+
+            _, country_flag = await asyncio.to_thread(
+                fetch_company_profile_sync, scan.symbol, self.settings.finnhub_api_key
+            )
+
+        content = build_watchlist_monitor_line(scan, country_flag=country_flag)
+        view = ScanDetailView(self, scan.symbol, title_prefix=title_prefix)
+        await channel.send(content=content, view=view)
 
     async def _on_scan_batch(self, scans: list[ScanResult]) -> None:
         if not self.settings.trading.mosquito_alerts_enabled:
