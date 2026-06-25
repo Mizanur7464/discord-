@@ -59,6 +59,7 @@ def build_benzinga_news_line(
     float_shares: float | None = None,
     country_flag: str = "",
     company_name: str = "",
+    link_mode: str = "article",
 ) -> str:
     """Nuntio row: **01:52 PM ET** | `42.5 M` 🇺🇸 **TICKER**: headline - Link."""
     _ = company_name
@@ -87,8 +88,12 @@ def build_benzinga_news_line(
     else:
         line = row
 
-    if article.url:
-        line = f"{line} - [Link]({article.url})" if line else f"[Link]({article.url})"
+    link = article.url
+    if link_mode == "quote" and symbol:
+        # Multi-ticker posts: each row should navigate to the correct symbol page.
+        link = f"https://www.benzinga.com/quote/{symbol}"
+    if link:
+        line = f"{line} - [Link]({link})" if line else f"[Link]({link})"
     return line[:2000]
 
 
@@ -99,12 +104,14 @@ def build_benzinga_news_post(
     **kwargs,
 ) -> str:
     if symbol_rows:
+        link_mode = "quote" if len(symbol_rows) > 1 else "article"
         lines = [
             build_benzinga_news_line(
                 article,
                 symbol=symbol,
                 float_shares=float_shares,
                 country_flag=country_flag,
+                link_mode=link_mode,
                 **kwargs,
             )
             for symbol, float_shares, country_flag in symbol_rows

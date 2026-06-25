@@ -66,4 +66,6 @@ def test_benzinga_news_post_multi_symbol_copy():
     assert "**AMTD**" in lines[0]
     assert "**HKD**" in lines[1]
     assert "**TGE**" in lines[2]
-    assert all(" - [Link](" in line for line in lines)
+    assert " - [Link](https://www.benzinga.com/quote/AMTD)" in lines[0]
+    assert " - [Link](https://www.benzinga.com/quote/HKD)" in lines[1]
+    assert " - [Link](https://www.benzinga.com/quote/TGE)" in lines[2]
