@@ -16,12 +16,15 @@ _ET = ZoneInfo("America/New_York")
 
 
 class SummaryPublisher:
-    def __init__(self, *, min_symbols: int = 3, top_limit: int = 15):
+    def __init__(self, *, min_symbols: int = 1, top_limit: int = 15):
         self.min_symbols = min_symbols
         self.top_limit = top_limit
         self._latest_scans: list[ScanResult] = []
         self._data_updated_at: datetime | None = None
         self._message: discord.Message | None = None
+
+    def reset_message(self) -> None:
+        self._message = None
 
     def update_scans(self, scans: list[ScanResult]) -> None:
         self._latest_scans = list(scans)
@@ -36,7 +39,7 @@ class SummaryPublisher:
         )
 
     async def publish(self, channel: discord.TextChannel, *, refresh_data: bool = True) -> bool:
-        if len(self._latest_scans) < self.min_symbols:
+        if not self._latest_scans:
             return False
         content = self._build_content()
         if self._message:
@@ -53,7 +56,7 @@ class SummaryPublisher:
         return True
 
     async def tick_footer(self, channel: discord.TextChannel) -> bool:
-        if not self._message or len(self._latest_scans) < self.min_symbols:
+        if not self._message or not self._latest_scans:
             return False
         content = self._build_content()
         try:

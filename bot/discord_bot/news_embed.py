@@ -85,11 +85,6 @@ def build_benzinga_news_line(
     else:
         row = headline
 
-    if published_et and row:
-        line = f"**{published_et}** | {row}"
-    else:
-        line = row
-
     reader_link = reader_article_url(reader_base_url, article.article_id)
     if reader_link:
         link = reader_link
@@ -98,8 +93,11 @@ def build_benzinga_news_line(
     else:
         link = article.url
     if link:
-        line = f"{line} - [Link]({link})" if line else f"[Link]({link})"
-    return line[:2000]
+        row = f"{row} - [Link]({link})" if row else f"[Link]({link})"
+
+    if published_et and row:
+        return f"**{published_et}**\n{row}"[:2000]
+    return row[:2000]
 
 
 def build_benzinga_news_post(
@@ -109,10 +107,22 @@ def build_benzinga_news_post(
     reader_base_url: str = "",
     **kwargs,
 ) -> str:
+    return "\n\n".join(build_benzinga_news_blocks(article, symbol_rows=symbol_rows, reader_base_url=reader_base_url, **kwargs))
+
+
+def build_benzinga_news_blocks(
+    article: BenzingaArticle,
+    *,
+    symbol_rows: list[tuple[str, float | None, str]] | None = None,
+    reader_base_url: str = "",
+    **kwargs,
+) -> list[str]:
+    """One Discord message per block — NB spacing between multi-ticker rows."""
     if symbol_rows:
         link_mode = "quote" if len(symbol_rows) > 1 and not reader_base_url else "article"
-        lines = [
-            build_benzinga_news_line(
+        blocks: list[str] = []
+        for symbol, float_shares, country_flag in symbol_rows:
+            line = build_benzinga_news_line(
                 article,
                 symbol=symbol,
                 float_shares=float_shares,
@@ -121,7 +131,8 @@ def build_benzinga_news_post(
                 reader_base_url=reader_base_url,
                 **kwargs,
             )
-            for symbol, float_shares, country_flag in symbol_rows
-        ]
-        return "\n".join(line for line in lines if line)
-    return build_benzinga_news_line(article, reader_base_url=reader_base_url, **kwargs)
+            if line:
+                blocks.append(line)
+        return blocks
+    line = build_benzinga_news_line(article, reader_base_url=reader_base_url, **kwargs)
+    return [line] if line else []

@@ -31,7 +31,7 @@ from bot.utils.timing import log_trade_speed, mark_news_if_absent, mark_step
 
 from bot.discord_bot.mosquito_automute import ChannelAutoMute, MosquitoAutoMute
 from bot.discord_bot.mosquito_embed import build_mosquito_alert
-from bot.discord_bot.news_embed import build_benzinga_news_post
+from bot.discord_bot.news_embed import build_benzinga_news_blocks
 from bot.discord_bot.scan_embed import build_scan_embed, format_scan_summary, _resolve_min_score
 from bot.discord_bot.watchlist_monitor_line import ScanDetailView, build_watchlist_monitor_line
 from bot.discord_bot.summary_publisher import SummaryPublisher
@@ -258,8 +258,49 @@ class NewsTradingBot(commands.Bot):
         if self.settings.bot.auto_start:
             self._monitoring = True
 
+        if self._summary_channel:
+            await self._purge_summary_channel(self._summary_channel)
+
         self._start_background_tasks()
         logger.info("Logged in as %s", self.user)
+
+    async def purge_bot_messages(
+        self,
+        channel: discord.TextChannel,
+        *,
+        max_messages: int = 1000,
+    ) -> int:
+        """Delete this bot's messages (Discord bulk purge, last 14 days)."""
+        if not self.user:
+            return 0
+        bot_id = self.user.id
+        total = 0
+        try:
+            while total < max_messages:
+                batch = await channel.purge(
+                    limit=min(100, max_messages - total),
+                    check=lambda message: message.author.id == bot_id,
+                )
+                if not batch:
+                    break
+                total += len(batch)
+                if len(batch) < 100:
+                    break
+        except discord.Forbidden:
+            raise
+        except Exception as exc:
+            logger.warning("Purge failed in #%s: %s", channel.name, exc)
+        return total
+
+    async def _purge_summary_channel(self, channel: discord.TextChannel) -> None:
+        self.summary_publisher.reset_message()
+        try:
+            deleted = await self.purge_bot_messages(channel)
+            logger.info("Summary channel cleaned (%s old bot message(s) removed)", deleted)
+        except discord.Forbidden:
+            logger.warning("Cannot purge #summary-channel — bot needs Manage Messages permission")
+        except Exception as exc:
+            logger.warning("Summary channel purge failed: %s", exc)
 
     def _start_background_tasks(self) -> None:
         self._background_tasks.append(asyncio.create_task(self._exit_monitor_loop()))
@@ -338,12 +379,13 @@ class NewsTradingBot(commands.Bot):
         except TimeoutError:
             logger.warning("Benzinga news metadata timeout for %s", symbols)
             symbol_rows = [(symbol, None, "🇺🇸") for symbol in symbols]
-        content = build_benzinga_news_post(
+        blocks = build_benzinga_news_blocks(
             article,
             symbol_rows=symbol_rows,
             reader_base_url=self._reader_base_url(),
         )
-        await self._news_channel.send(content, suppress_embeds=True)
+        for block in blocks:
+            await self._news_channel.send(block, suppress_embeds=True)
         for symbol in article.symbols:
             await self._maybe_send_potential_hit(symbol, article)
 
@@ -1384,6 +1426,7 @@ class BotCommands(commands.Cog):
             ("/start", "Start news monitoring"),
             ("/stop", "Stop news monitoring"),
             ("/check", "Scan recent messages from news channels"),
+            ("/purge", "Delete this bot's old messages (news/summary)"),
             ("/paper_reset", "Cancel paper orders and close positions"),
         ]
         for name, desc in commands_list:
@@ -1427,6 +1470,67 @@ class BotCommands(commands.Cog):
     async def stop_cmd(self, interaction: discord.Interaction) -> None:
         self.bot._monitoring = False
         await interaction.response.send_message("⏸️ **Monitoring stopped.**")
+
+    @discord.app_commands.command(name="purge", description="Delete this bot's old messages from a channel")
+    @discord.app_commands.describe(
+        target="news = #news-channel, summary = #summary-channel, all = both, this = current channel"
+    )
+    @discord.app_commands.choices(
+        target=[
+            discord.app_commands.Choice(name="News channel", value="news"),
+            discord.app_commands.Choice(name="Summary channel", value="summary"),
+            discord.app_commands.Choice(name="News + Summary", value="all"),
+            discord.app_commands.Choice(name="This channel", value="this"),
+        ]
+    )
+    async def purge_cmd(self, interaction: discord.Interaction, target: str = "all") -> None:
+        perms = interaction.user.guild_permissions if interaction.guild else None
+        if not perms or not (perms.manage_messages or perms.administrator):
+            await interaction.response.send_message(
+                "You need **Manage Messages** or **Administrator** to run `/purge`.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        channels: list[tuple[str, discord.TextChannel]] = []
+        if target == "this":
+            if isinstance(interaction.channel, discord.TextChannel):
+                channels.append(("this channel", interaction.channel))
+        elif target == "news":
+            if self.bot._news_channel:
+                channels.append(("news", self.bot._news_channel))
+        elif target == "summary":
+            if self.bot._summary_channel:
+                channels.append(("summary", self.bot._summary_channel))
+        else:
+            if self.bot._news_channel:
+                channels.append(("news", self.bot._news_channel))
+            if self.bot._summary_channel:
+                channels.append(("summary", self.bot._summary_channel))
+
+        if not channels:
+            await interaction.followup.send("No channel found to purge. Check `.env` channel IDs.")
+            return
+
+        lines: list[str] = []
+        try:
+            for label, channel in channels:
+                if label == "summary":
+                    self.bot.summary_publisher.reset_message()
+                deleted = await self.bot.purge_bot_messages(channel)
+                lines.append(f"**#{channel.name}** ({label}): deleted **{deleted}** bot message(s)")
+        except discord.Forbidden:
+            await interaction.followup.send(
+                "Bot needs **Manage Messages** permission in that channel."
+            )
+            return
+
+        note = "\n".join(lines)
+        await interaction.followup.send(
+            f"✅ Purge done.\n{note}\n\n_Note: Discord only bulk-deletes messages from the last 14 days._"
+        )
 
     @discord.app_commands.command(name="check", description="Scan recent messages from news channels")
     async def check_cmd(self, interaction: discord.Interaction) -> None:
