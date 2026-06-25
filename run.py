@@ -53,7 +53,7 @@ def main() -> None:
         print("See .env.example and create a .env file.\n")
         sys.exit(1)
 
-    print("\nStarting News Trading Bot...")
+    print(f"\nStarting {settings.bot.name}...")
     print(f"   Broker: Alpaca ({'PAPER' if settings.alpaca_paper else 'LIVE'})")
     print(f"   Auto trade: {'enabled' if settings.trading.enabled else 'disabled'}")
     if settings.news.source_channel_ids:

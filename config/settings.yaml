@@ -5,6 +5,7 @@
 
 bot:
   command_prefix: "!"
+  name: "News Trading Bot"
   auto_start: true
 
 news:

@@ -56,7 +56,8 @@ def test_render_article_page_includes_body():
         symbols=["AMTD"],
         published="2026-06-25T17:52:00Z",
     )
-    html = render_article_page(article)
+    html = render_article_page(article, brand_name="Dolcettoo Bot")
     assert "L&#x27;OFFICIEL AMTD IDEA Sets 2026 Launch" in html
     assert "Launch details here." in html
     assert "AMTD" in html
+    assert "Dolcettoo Bot" in html

@@ -22,11 +22,13 @@ class NewsReaderServer:
         port: int = 8787,
         api_key: str = "",
         provider: str = "massive",
+        brand_name: str = "",
     ):
         self.store = store
         self.port = max(1024, int(port))
         self.api_key = api_key
         self.provider = provider
+        self.brand_name = brand_name or "News Trading Bot"
         self._runner: web.AppRunner | None = None
         self._site: web.TCPSite | None = None
 
@@ -55,12 +57,12 @@ class NewsReaderServer:
         article = await asyncio.to_thread(self._lookup_article, article_id)
         if not article:
             return web.Response(
-                text=render_not_found_page(article_id),
+                text=render_not_found_page(article_id, brand_name=self.brand_name),
                 content_type="text/html",
                 status=404,
             )
         return web.Response(
-            text=render_article_page(article),
+            text=render_article_page(article, brand_name=self.brand_name),
             content_type="text/html",
         )
 

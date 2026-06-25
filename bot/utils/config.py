@@ -143,6 +143,7 @@ class TradingConfig:
 @dataclass
 class BotConfig:
     command_prefix: str
+    name: str = "News Trading Bot"
     auto_start: bool = True
 
 
@@ -295,9 +296,14 @@ def load_settings() -> Settings:
     else:
         reader_enabled = bool(news_raw.get("reader_enabled", bool(benzinga_api_key)))
     reader_base_url = _resolve_reader_base_url(reader_port) if reader_enabled else ""
+    bot_name = os.getenv("BOT_NAME", "").strip() or str(raw["bot"].get("name", "News Trading Bot")).strip()
 
     return Settings(
-        bot=BotConfig(**raw["bot"]),
+        bot=BotConfig(
+            command_prefix=raw["bot"]["command_prefix"],
+            name=bot_name or "News Trading Bot",
+            auto_start=raw["bot"].get("auto_start", True),
+        ),
         news=NewsConfig(
             source_channel_ids=_parse_channel_ids(source_channels),
             allowed_url_domains=news_raw.get("allowed_url_domains", ["news.nuntiobot.com"]),

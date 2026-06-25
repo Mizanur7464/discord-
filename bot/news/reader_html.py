@@ -28,9 +28,10 @@ def _article_body_html(article: BenzingaArticle) -> str:
     return f"<p>{html.escape(article.title)}</p>"
 
 
-def render_article_page(article: BenzingaArticle) -> str:
+def render_article_page(article: BenzingaArticle, *, brand_name: str = "") -> str:
     title = html.escape(article.title)
     published = html.escape(_format_published_et(article.published))
+    brand = html.escape(brand_name or "News Trading Bot")
     symbols = " ".join(
         f'<a class="ticker" href="https://www.benzinga.com/quote/{html.escape(symbol)}">{html.escape(symbol)}</a>'
         for symbol in article.symbols[:8]
@@ -64,6 +65,14 @@ def render_article_page(article: BenzingaArticle) -> str:
       max-width: 760px;
       margin: 0 auto;
       padding: 24px 16px 48px;
+    }}
+    .brand {{
+      margin-bottom: 14px;
+      color: var(--accent);
+      font-size: 0.95rem;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
     }}
     .card {{
       background: var(--panel);
@@ -105,6 +114,7 @@ def render_article_page(article: BenzingaArticle) -> str:
 </head>
 <body>
   <div class="wrap">
+    <div class="brand">{brand}</div>
     <article class="card">
       <h1>{title}</h1>
       <div class="meta">
@@ -113,7 +123,7 @@ def render_article_page(article: BenzingaArticle) -> str:
       </div>
       <div class="content">{body}</div>
       <div class="footer">
-        Licensed Benzinga content served for Discord readers.
+        {brand} news reader.
         <a href="{source_url}" rel="noopener noreferrer">Original source</a>
       </div>
     </article>
@@ -122,8 +132,9 @@ def render_article_page(article: BenzingaArticle) -> str:
 </html>"""
 
 
-def render_not_found_page(article_id: str) -> str:
+def render_not_found_page(article_id: str, *, brand_name: str = "") -> str:
     safe_id = html.escape(article_id)
+    brand = html.escape(brand_name or "News Trading Bot")
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -152,6 +163,7 @@ def render_not_found_page(article_id: str) -> str:
 </head>
 <body>
   <div class="box">
+    <div style="color:#60a5fa;font-weight:700;margin-bottom:12px;">{brand}</div>
     <h1>Article not found</h1>
     <p>We could not load article <code>{safe_id}</code>. It may be older than our cache window.</p>
   </div>

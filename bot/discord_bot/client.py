@@ -121,6 +121,7 @@ class NewsTradingBot(commands.Bot):
                 port=settings.news.reader_port,
                 api_key=settings.benzinga_api_key,
                 provider=settings.benzinga_news_provider,
+                brand_name=settings.bot.name,
             )
         self.realtime_scanner: RealtimeScanner | None = None
         if settings.trading.realtime_scanner_enabled:
@@ -209,7 +210,7 @@ class NewsTradingBot(commands.Bot):
                 else "Mode: automatic trading on bullish signals.\n"
             )
             await channel.send(
-                "✅ **News Trading Bot is online!**\n"
+                f"✅ **{self.settings.bot.name} is online!**\n"
                 f"Watching {source_count} news channel(s) in real time.\n"
                 f"{mode_line}"
                 "Type `/help` to see available commands."
