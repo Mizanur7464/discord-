@@ -17,7 +17,7 @@ def test_benzinga_news_line_nuntio_style():
     )
     assert "`42.5 M`" in line
     assert "🇫🇷" in line
-    assert "`AMTD`" in line
+    assert "**AMTD**" in line
     assert "L'OFFICIEL AMTD IDEA" in line
     assert " - [Link](" in line
     assert "(AMTD)" not in line
@@ -40,7 +40,7 @@ def test_benzinga_news_post_multi_symbol_copy():
     )
     lines = post.split("\n")
     assert len(lines) == 3
-    assert "`AMTD`" in lines[0]
-    assert "`HKD`" in lines[1]
-    assert "`TGE`" in lines[2]
+    assert "**AMTD**" in lines[0]
+    assert "**HKD**" in lines[1]
+    assert "**TGE**" in lines[2]
     assert all(" - [Link](" in line for line in lines)

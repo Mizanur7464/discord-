@@ -41,7 +41,7 @@ def build_benzinga_news_line(
     country_flag: str = "",
     company_name: str = "",
 ) -> str:
-    """Nuntio row: `42.5 M` 🇺🇸 `TICKER`: headline - Link."""
+    """Nuntio row: `42.5 M` 🇺🇸 **TICKER**: headline - Link."""
     _ = company_name
     symbol = (symbol or (article.symbols[0] if article.symbols else "")).upper()
     headline = _headline_for_symbol(article, symbol)
@@ -53,7 +53,7 @@ def build_benzinga_news_line(
     if country_flag:
         prefix_parts.append(country_flag)
     if symbol:
-        prefix_parts.append(f"`{symbol}`")
+        prefix_parts.append(f"**{symbol}**")
 
     if prefix_parts and headline:
         line = f"{' '.join(prefix_parts)}: {headline}".strip()
