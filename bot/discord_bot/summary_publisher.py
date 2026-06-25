@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 
 import discord
 
-from bot.discord_bot.summary_embed import build_live_summary_embed
+from bot.discord_bot.summary_embed import build_live_summary_message
 from bot.trading.scanner import ScanResult
 
 logger = logging.getLogger(__name__)
@@ -20,44 +20,44 @@ class SummaryPublisher:
         self.min_symbols = min_symbols
         self.top_limit = top_limit
         self._latest_scans: list[ScanResult] = []
+        self._data_updated_at: datetime | None = None
         self._message: discord.Message | None = None
 
     def update_scans(self, scans: list[ScanResult]) -> None:
         self._latest_scans = list(scans)
+        self._data_updated_at = datetime.now(_ET)
+
+    def _build_content(self, *, now: datetime | None = None) -> str:
+        return build_live_summary_message(
+            self._latest_scans,
+            top_limit=self.top_limit,
+            updated_at=now or datetime.now(_ET),
+            data_updated_at=self._data_updated_at,
+        )
 
     async def publish(self, channel: discord.TextChannel, *, refresh_data: bool = True) -> bool:
         if len(self._latest_scans) < self.min_symbols:
             return False
-        now = datetime.now(_ET)
-        embed = build_live_summary_embed(
-            self._latest_scans,
-            top_limit=self.top_limit,
-            updated_at=now,
-        )
+        content = self._build_content()
         if self._message:
             try:
-                await self._message.edit(embed=embed)
+                await self._message.edit(content=content, embed=None)
                 return True
             except discord.NotFound:
                 self._message = None
             except Exception as exc:
                 logger.warning("Summary edit failed: %s", exc)
                 self._message = None
-        self._message = await channel.send(embed=embed)
+        self._message = await channel.send(content, suppress_embeds=True)
         logger.info("Summary published (%s symbols)", len(self._latest_scans))
         return True
 
     async def tick_footer(self, channel: discord.TextChannel) -> bool:
         if not self._message or len(self._latest_scans) < self.min_symbols:
             return False
-        now = datetime.now(_ET)
-        embed = build_live_summary_embed(
-            self._latest_scans,
-            top_limit=self.top_limit,
-            updated_at=now,
-        )
+        content = self._build_content()
         try:
-            await self._message.edit(embed=embed)
+            await self._message.edit(content=content, embed=None)
             return True
         except Exception:
             self._message = None

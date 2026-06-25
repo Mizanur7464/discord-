@@ -342,6 +342,7 @@ class NewsTradingBot(commands.Bot):
             article,
             symbol_rows=symbol_rows,
             reader_base_url=self._reader_base_url(),
+            link_label=self.settings.bot.name,
         )
         await self._news_channel.send(content, suppress_embeds=True)
         for symbol in article.symbols:

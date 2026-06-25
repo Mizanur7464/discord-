@@ -25,8 +25,10 @@ def test_news_embed_uses_reader_link_for_multi_symbol():
             ("HKD", 117_000_000, "🇺🇸"),
         ],
         reader_base_url="http://news.example.com",
+        link_label="Dolcettoo Bot",
     )
     assert "http://news.example.com/n/44577082" in post
+    assert "[Dolcettoo Bot]" in post
     assert "benzinga.com/quote/" not in post
 
 

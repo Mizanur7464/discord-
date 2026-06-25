@@ -76,7 +76,11 @@ class NewsReaderServer:
         await self._runner.setup()
         self._site = web.TCPSite(self._runner, host="0.0.0.0", port=self.port)
         await self._site.start()
-        logger.info("News reader listening on http://0.0.0.0:%s", self.port)
+        logger.info(
+            "News reader listening for %s on port %s",
+            self.brand_name,
+            self.port,
+        )
 
     async def stop(self) -> None:
         if self._runner:

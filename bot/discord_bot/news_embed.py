@@ -62,6 +62,7 @@ def build_benzinga_news_line(
     company_name: str = "",
     link_mode: str = "article",
     reader_base_url: str = "",
+    link_label: str = "Link",
 ) -> str:
     """Nuntio row: **01:52 PM ET** | `42.5 M` 🇺🇸 **TICKER**: headline - Link."""
     _ = company_name
@@ -98,7 +99,8 @@ def build_benzinga_news_line(
     else:
         link = article.url
     if link:
-        line = f"{line} - [Link]({link})" if line else f"[Link]({link})"
+        label = link_label if reader_link else "Link"
+        line = f"{line} - [{label}]({link})" if line else f"[{label}]({link})"
     return line[:2000]
 
 
@@ -107,6 +109,7 @@ def build_benzinga_news_post(
     *,
     symbol_rows: list[tuple[str, float | None, str]] | None = None,
     reader_base_url: str = "",
+    link_label: str = "Link",
     **kwargs,
 ) -> str:
     if symbol_rows:
@@ -119,9 +122,15 @@ def build_benzinga_news_post(
                 country_flag=country_flag,
                 link_mode=link_mode,
                 reader_base_url=reader_base_url,
+                link_label=link_label,
                 **kwargs,
             )
             for symbol, float_shares, country_flag in symbol_rows
         ]
         return "\n".join(line for line in lines if line)
-    return build_benzinga_news_line(article, reader_base_url=reader_base_url, **kwargs)
+    return build_benzinga_news_line(
+        article,
+        reader_base_url=reader_base_url,
+        link_label=link_label,
+        **kwargs,
+    )
