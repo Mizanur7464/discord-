@@ -66,6 +66,11 @@ class TradingConfig:
     mosquito_automute_window_seconds: int = 90
     mosquito_automute_max_alerts: int = 8
     mosquito_automute_duration_seconds: int = 180
+    watchlist_alert_cooldown_seconds: int = 600
+    watchlist_max_alerts_per_batch: int = 3
+    watchlist_automute_window_seconds: int = 90
+    watchlist_automute_max_alerts: int = 6
+    watchlist_automute_duration_seconds: int = 180
     watchlist_mode_enabled: bool = True
     watchlist_days: int = 3
     watchlist_volume_increase_percent: float = 20.0
@@ -296,6 +301,11 @@ def load_settings() -> Settings:
             mosquito_automute_window_seconds=int(trading_raw.get("mosquito_automute_window_seconds", 90)),
             mosquito_automute_max_alerts=int(trading_raw.get("mosquito_automute_max_alerts", 8)),
             mosquito_automute_duration_seconds=int(trading_raw.get("mosquito_automute_duration_seconds", 180)),
+            watchlist_alert_cooldown_seconds=int(trading_raw.get("watchlist_alert_cooldown_seconds", 600)),
+            watchlist_max_alerts_per_batch=int(trading_raw.get("watchlist_max_alerts_per_batch", 3)),
+            watchlist_automute_window_seconds=int(trading_raw.get("watchlist_automute_window_seconds", 90)),
+            watchlist_automute_max_alerts=int(trading_raw.get("watchlist_automute_max_alerts", 6)),
+            watchlist_automute_duration_seconds=int(trading_raw.get("watchlist_automute_duration_seconds", 180)),
             watchlist_mode_enabled=trading_raw.get("watchlist_mode_enabled", True),
             watchlist_days=int(trading_raw.get("watchlist_days", 3)),
             watchlist_volume_increase_percent=float(trading_raw.get("watchlist_volume_increase_percent", 20)),

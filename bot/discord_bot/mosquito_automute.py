@@ -40,3 +40,6 @@ class MosquitoAutoMute:
         if len(self._sent_at) >= self.max_alerts_in_window:
             self._muted_until = now + self.mute_seconds
             self._sent_at.clear()
+
+
+ChannelAutoMute = MosquitoAutoMute  # same SPM-style gate for #watchlist-monitor

@@ -57,6 +57,11 @@ trading:
   mosquito_automute_window_seconds: 90   # SPM-style auto-mute rolling window
   mosquito_automute_max_alerts: 8        # max posts in window before mute
   mosquito_automute_duration_seconds: 180  # mute length when too noisy
+  watchlist_alert_cooldown_seconds: 600    # per-symbol watchlist row cooldown (10 min)
+  watchlist_max_alerts_per_batch: 3        # top setups per realtime scan cycle
+  watchlist_automute_window_seconds: 90   # SPM-style watchlist auto-mute window
+  watchlist_automute_max_alerts: 6        # max watchlist rows in window before mute
+  watchlist_automute_duration_seconds: 180
   watchlist_mode_enabled: true            # AI bullish news first goes to watchlist, then waits for breakout
   watchlist_days: 3                       # keep AI-filtered symbols for this many days
   watchlist_volume_increase_percent: 20   # enter when mosquito volume rises this much from baseline

@@ -25,7 +25,7 @@ from bot.trading.universe_scanner import fetch_universe_symbols
 from bot.utils.config import Settings
 from bot.utils.timing import log_trade_speed, mark_news_if_absent, mark_step
 
-from bot.discord_bot.mosquito_automute import MosquitoAutoMute
+from bot.discord_bot.mosquito_automute import ChannelAutoMute, MosquitoAutoMute
 from bot.discord_bot.mosquito_embed import build_mosquito_alert
 from bot.discord_bot.news_embed import build_benzinga_news_post
 from bot.discord_bot.scan_embed import build_scan_embed, format_scan_summary, _resolve_min_score
@@ -124,13 +124,21 @@ class NewsTradingBot(commands.Bot):
         self._news_channel: discord.TextChannel | None = None
         self._mosquito_channel: discord.TextChannel | None = None
         self._mosquito_recent: dict[str, float] = {}
+        self._watchlist_recent: dict[str, float] = {}
+        self._watchlist_batch_sent: int = 0
         cfg = settings.trading
         self._mosquito_automute = MosquitoAutoMute(
             window_seconds=cfg.mosquito_automute_window_seconds,
             max_alerts_in_window=cfg.mosquito_automute_max_alerts,
             mute_seconds=cfg.mosquito_automute_duration_seconds,
         )
+        self._watchlist_automute = ChannelAutoMute(
+            window_seconds=cfg.watchlist_automute_window_seconds,
+            max_alerts_in_window=cfg.watchlist_automute_max_alerts,
+            mute_seconds=cfg.watchlist_automute_duration_seconds,
+        )
         self._mosquito_mute_notice_at: float = 0.0
+        self._watchlist_mute_notice_at: float = 0.0
         self._scan_detail_cache: dict[str, tuple[ScanResult, int]] = {}
         self._processed_messages: set[str] = set()
 
@@ -377,9 +385,23 @@ class NewsTradingBot(commands.Bot):
         *,
         title_prefix: str = "Realtime Scanner",
     ) -> None:
+        import time
+
         channel = self._watchlist_channel or self._alert_channel
         if not channel:
             return
+        on_watchlist_channel = self._watchlist_channel is not None and channel.id == self._watchlist_channel.id
+        if on_watchlist_channel:
+            if not self._watchlist_automute.can_send():
+                await self._maybe_notify_watchlist_mute()
+                return
+            if self._watchlist_batch_sent >= self.settings.trading.watchlist_max_alerts_per_batch:
+                return
+            now = time.time()
+            cooldown = self.settings.trading.watchlist_alert_cooldown_seconds
+            if now - self._watchlist_recent.get(scan.symbol, 0) < cooldown:
+                return
+
         min_score = self._scanner_min_score(scan)
         self._scan_detail_cache[scan.symbol.upper()] = (scan, min_score)
 
@@ -395,7 +417,33 @@ class NewsTradingBot(commands.Bot):
         view = ScanDetailView(self, scan.symbol, title_prefix=title_prefix)
         await channel.send(content=content, view=view)
 
+        if on_watchlist_channel:
+            self._watchlist_recent[scan.symbol] = time.time()
+            self._watchlist_automute.record_send()
+            self._watchlist_batch_sent += 1
+
+    def reset_watchlist_batch_counter(self) -> None:
+        self._watchlist_batch_sent = 0
+
+    async def _maybe_notify_watchlist_mute(self) -> None:
+        import time
+
+        if not self._watchlist_channel:
+            return
+        now = time.time()
+        if now - self._watchlist_mute_notice_at < 300:
+            return
+        remaining = self._watchlist_automute.muted_seconds_remaining
+        if remaining <= 0:
+            return
+        await self._watchlist_channel.send(
+            f"🔇 **Watchlist auto-muted** — too many alerts. Resuming in ~{remaining // 60 or 1} min."
+        )
+        self._watchlist_mute_notice_at = now
+        logger.info("Watchlist auto-muted for %ss", remaining)
+
     async def _on_scan_batch(self, scans: list[ScanResult]) -> None:
+        self.reset_watchlist_batch_counter()
         if not self.settings.trading.mosquito_alerts_enabled:
             return
         candidates = [scan for scan in scans if self._qualifies_mosquito(scan)]
