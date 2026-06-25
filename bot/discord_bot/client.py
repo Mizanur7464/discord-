@@ -257,27 +257,14 @@ class NewsTradingBot(commands.Bot):
             return
         symbol = article.symbols[0] if article.symbols else ""
         if self._news_channel:
-            float_shares = None
             company_name = ""
-            country_flag = "🇺🇸"
             if symbol and self.settings.finnhub_api_key:
-                from bot.trading.market_data import (
-                    fetch_company_profile_sync,
-                    fetch_float_shares_sync,
-                )
+                from bot.trading.market_data import fetch_company_profile_sync
 
-                float_shares = await asyncio.to_thread(
-                    fetch_float_shares_sync, symbol, self.settings.finnhub_api_key
-                )
-                company_name, country_flag = await asyncio.to_thread(
+                company_name, _ = await asyncio.to_thread(
                     fetch_company_profile_sync, symbol, self.settings.finnhub_api_key
                 )
-            content = build_benzinga_news_post(
-                article,
-                float_shares=float_shares,
-                company_name=company_name,
-                country_flag=country_flag,
-            )
+            content = build_benzinga_news_post(article, company_name=company_name)
             await self._news_channel.send(content, suppress_embeds=True)
 
         text = article.title if not article.body else f"{article.title}\n{article.body[:4000]}"

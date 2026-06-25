@@ -110,4 +110,4 @@ class ScanDetailView(discord.ui.View):
             return
         scan, min_score = cached
         embed = build_scan_embed(scan, min_score=min_score, title_prefix=self._title_prefix)
-        await interaction.response.send_message(embed=embed)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
