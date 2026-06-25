@@ -1,18 +1,23 @@
 from bot.news.benzinga import BenzingaArticle
-from bot.discord_bot.news_embed import build_benzinga_news_post
+from bot.discord_bot.news_embed import build_benzinga_news_line
 
 
-def test_benzinga_news_post_has_time_and_no_url_in_embed():
+def test_benzinga_news_line_nuntio_style():
     article = BenzingaArticle(
         article_id="1",
-        title="Comparing Microsoft With Industry Competitors",
+        title="ORIS - Oriental Rise Provides Update Regarding Nasdaq Delisting Decision",
         url="https://www.benzinga.com/news/example",
-        symbols=["MSFT"],
-        published="2026-06-19T16:32:00-04:00",
+        symbols=["ORIS"],
     )
-    embed, view = build_benzinga_news_post(article)
-    assert "04:32:00 PM ET" in embed.description
-    assert "MSFT" in embed.description
-    assert "benzinga.com" not in (embed.description or "")
-    assert view is not None
-    assert len(view.children) == 1
+    line = build_benzinga_news_line(
+        article,
+        float_shares=2_300_000,
+        company_name="Oriental Rise",
+        country_flag="🇨🇳",
+    )
+    assert "`2.3 M`" in line
+    assert "🇨🇳" in line
+    assert "**ORIS**: Oriental Rise" in line
+    assert "`Provides Update`" in line
+    assert "`Delisting`" in line
+    assert "[Link](https://www.benzinga.com/news/example)" in line

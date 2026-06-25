@@ -86,3 +86,39 @@ def fetch_float_shares_sync(symbol: str, finnhub_api_key: str) -> float | None:
     if 0 < value < 10_000:
         value *= 1_000_000
     return value
+
+
+def fetch_company_profile_sync(symbol: str, finnhub_api_key: str) -> tuple[str, str]:
+    """Return (company_name, country_flag_emoji)."""
+    if not finnhub_api_key:
+        return "", "🇺🇸"
+    url = (
+        "https://finnhub.io/api/v1/stock/profile2"
+        f"?symbol={quote(symbol.upper())}&token={quote(finnhub_api_key)}"
+    )
+    try:
+        with urlopen(Request(url, headers={"User-Agent": "discord-news-bot/1.0"}), timeout=8) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+    except Exception as exc:
+        logger.debug("Finnhub profile fetch failed for %s: %s", symbol, exc)
+        return "", "🇺🇸"
+
+    name = str(payload.get("name") or "").strip()
+    country = str(payload.get("country") or "US").upper()
+    flags = {
+        "US": "🇺🇸",
+        "CN": "🇨🇳",
+        "HK": "🇭🇰",
+        "CA": "🇨🇦",
+        "GB": "🇬🇧",
+        "IL": "🇮🇱",
+        "IN": "🇮🇳",
+        "JP": "🇯🇵",
+        "KR": "🇰🇷",
+        "TW": "🇹🇼",
+        "AU": "🇦🇺",
+        "DE": "🇩🇪",
+        "FR": "🇫🇷",
+        "SG": "🇸🇬",
+    }
+    return name, flags.get(country, "🇺🇸")

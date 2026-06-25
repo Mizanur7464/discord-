@@ -1,68 +1,128 @@
-"""Compact Benzinga news posts for #news-channel (SPM/NB style)."""
+"""NuntioBot-style one-line Benzinga news posts for #news-channel."""
 
 from __future__ import annotations
 
-from datetime import datetime
-from zoneinfo import ZoneInfo
-
-import discord
+import re
 
 from bot.news.benzinga import BenzingaArticle
 
-_ET = ZoneInfo("America/New_York")
+_INLINE_TAG_PHRASES: tuple[str, ...] = (
+    "Provides Update",
+    "Reports Financial Results",
+    "Reports Earnings",
+    "Public Offering",
+    "Reverse Split",
+    "FDA Approval",
+    "Receives FDA",
+    "Guidance Update",
+    "Provides Guidance",
+    "Merger Agreement",
+    "Acquisition Agreement",
+    "Delisting",
+    "Compliance Notice",
+    "Announces",
+    "Reports",
+    "Files",
+    "Launches",
+    "Partnership",
+    "Contract",
+    "Upgrade",
+    "Downgrade",
+    "Earnings",
+    "Guidance",
+    "Offering",
+    "Approval",
+    "Merger",
+    "Acquisition",
+)
 
 
-def _parse_published(published: str) -> datetime | None:
-    if not published:
-        return None
-    text = published.strip()
-    if text.endswith("Z"):
-        text = f"{text[:-1]}+00:00"
-    try:
-        return datetime.fromisoformat(text)
-    except ValueError:
-        pass
-    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
-        try:
-            return datetime.strptime(text[:19], fmt).replace(tzinfo=_ET)
-        except ValueError:
-            continue
-    return None
-
-
-def _article_time(article: BenzingaArticle) -> tuple[str, datetime]:
-    parsed = _parse_published(article.published)
-    if parsed is None:
-        parsed = datetime.now(_ET)
-    elif parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=_ET)
+def _format_float_badge(float_shares: float | None) -> str:
+    if not float_shares:
+        return ""
+    millions = float_shares / 1_000_000
+    if millions >= 100:
+        text = f"{millions:.0f} M"
     else:
-        parsed = parsed.astimezone(_ET)
-    return parsed.strftime("%I:%M:%S %p ET"), parsed
+        text = f"{millions:.1f} M"
+    return f"`{text}`"
 
 
-def _headline(article: BenzingaArticle, symbol: str) -> str:
+def _company_from_title(title: str, symbol: str) -> str:
+    if not symbol:
+        return ""
+    pattern = re.compile(rf"^{re.escape(symbol)}\s*[-–:]\s*(.+)$", re.IGNORECASE)
+    match = pattern.match(title.strip())
+    if not match:
+        return ""
+    rest = match.group(1).strip()
+    for phrase in _INLINE_TAG_PHRASES:
+        idx = rest.lower().find(phrase.lower())
+        if idx > 0:
+            return rest[:idx].strip(" -–:")
+        if idx == 0:
+            break
+    words = rest.split()
+    return " ".join(words[:4]).strip(" -–:")
+
+
+def _highlight_title_tags(text: str) -> str:
+    updated = text
+    for phrase in sorted(_INLINE_TAG_PHRASES, key=len, reverse=True):
+        pattern = re.compile(re.escape(phrase), re.IGNORECASE)
+
+        def repl(match: re.Match[str]) -> str:
+            return f"`{match.group(0)}`"
+
+        updated = pattern.sub(repl, updated, count=1)
+    return updated
+
+
+def _headline_text(article: BenzingaArticle, symbol: str, company_name: str) -> str:
     title = article.title.strip()
-    if symbol and not title.upper().startswith(symbol.upper()):
-        return f"**{symbol}** — {title[:220]}"
-    return title[:240]
+    if symbol:
+        if title.upper().startswith(symbol.upper()):
+            title = title[len(symbol) :].lstrip(" -–:")
+        if company_name and title.lower().startswith(company_name.lower()):
+            title = title[len(company_name) :].lstrip(" -–:")
+    return _highlight_title_tags(title.strip())
 
 
-def build_news_link_view(url: str) -> discord.ui.View | None:
-    if not url:
-        return None
-    view = discord.ui.View()
-    view.add_item(discord.ui.Button(style=discord.ButtonStyle.link, label="Read", url=url))
-    return view
-
-
-def build_benzinga_news_post(article: BenzingaArticle) -> tuple[discord.Embed, discord.ui.View | None]:
+def build_benzinga_news_line(
+    article: BenzingaArticle,
+    *,
+    float_shares: float | None = None,
+    company_name: str = "",
+    country_flag: str = "🇺🇸",
+) -> str:
+    """Single-line Nuntio-style post: float badge, flag, ticker, tags, Link."""
     symbol = article.symbols[0] if article.symbols else ""
-    time_label, when = _article_time(article)
-    embed = discord.Embed(
-        description=f"**{time_label}**\n{_headline(article, symbol)}",
-        color=discord.Color.from_rgb(88, 101, 242),
-    )
-    embed.timestamp = when
-    embed.set_footer(text="Benzinga")
-    return embed, build_news_link_view(article.url)
+    company = company_name or _company_from_title(article.title, symbol)
+    parts: list[str] = []
+
+    float_badge = _format_float_badge(float_shares)
+    if float_badge:
+        parts.append(float_badge)
+    if country_flag:
+        parts.append(country_flag)
+
+    if symbol and company:
+        parts.append(f"**{symbol}**: {company}")
+    elif symbol:
+        parts.append(f"**{symbol}**")
+    elif company:
+        parts.append(company)
+
+    headline = _headline_text(article, symbol, company)
+    if headline:
+        parts.append(headline)
+
+    line = " ".join(part for part in parts if part).strip()
+    if article.url:
+        line = f"{line} - [Link]({article.url})" if line else f"[Link]({article.url})"
+    return line[:2000]
+
+
+def build_benzinga_news_post(article: BenzingaArticle, **kwargs) -> str:
+    """Backward-compatible alias."""
+    return build_benzinga_news_line(article, **kwargs)
