@@ -1484,14 +1484,6 @@ class BotCommands(commands.Cog):
         ]
     )
     async def purge_cmd(self, interaction: discord.Interaction, target: str = "all") -> None:
-        perms = interaction.user.guild_permissions if interaction.guild else None
-        if not perms or not (perms.manage_messages or perms.administrator):
-            await interaction.response.send_message(
-                "You need **Manage Messages** or **Administrator** to run `/purge`.",
-                ephemeral=True,
-            )
-            return
-
         await interaction.response.defer(ephemeral=True)
 
         channels: list[tuple[str, discord.TextChannel]] = []
