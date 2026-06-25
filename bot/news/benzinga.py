@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 import json
 import logging
 from dataclasses import dataclass, field
@@ -69,14 +70,18 @@ def _parse_symbols(item: dict) -> list[str]:
     return symbols[:8]
 
 
+def _clean_text(text: str) -> str:
+    return html.unescape(str(text or "")).strip()
+
+
 def parse_benzinga_article(item: dict) -> BenzingaArticle | None:
     article_id = str(item.get("id") or item.get("benzinga_id") or item.get("article_id") or "").strip()
-    title = str(item.get("title") or item.get("headline") or "").strip()
+    title = _clean_text(item.get("title") or item.get("headline") or "")
     if not title:
         return None
     if not article_id:
         article_id = str(hash(title))
-    body = str(item.get("body") or item.get("teaser") or item.get("summary") or "").strip()
+    body = _clean_text(item.get("body") or item.get("teaser") or item.get("summary") or "")
     url = str(item.get("url") or item.get("link") or "").strip()
     published = str(item.get("created") or item.get("published") or item.get("updated") or "").strip()
     return BenzingaArticle(
@@ -96,6 +101,7 @@ def _fetch_news_payload(
     page_size: int = 25,
     provider: str = "massive",
 ) -> list[dict]:
+    page_size = max(1, min(page_size, 100))
     if provider == "direct":
         query = (
             f"https://api.benzinga.com/api/v2/news"
@@ -104,7 +110,11 @@ def _fetch_news_payload(
         if symbols:
             query += f"&tickers={quote(symbols.upper())}"
     else:
-        params: dict[str, str | int] = {"apiKey": api_key, "limit": page_size}
+        params: dict[str, str | int] = {
+            "apiKey": api_key,
+            "limit": page_size,
+            "sort": "published.desc",
+        }
         if symbols:
             params["tickers"] = symbols.upper()
         query = f"https://api.massive.com/benzinga/v2/news?{urlencode(params)}"

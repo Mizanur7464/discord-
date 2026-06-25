@@ -1,10 +1,15 @@
-"""Summary channel embeds (Phase 5)."""
+"""Summary channel embeds — live top gainers board."""
 
 from __future__ import annotations
+
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import discord
 
 from bot.trading.scanner import ScanResult
+
+_ET = ZoneInfo("America/New_York")
 
 
 def _compact_number(value: float | None, *, prefix: str = "", suffix: str = "") -> str:
@@ -19,97 +24,56 @@ def _compact_number(value: float | None, *, prefix: str = "", suffix: str = "") 
     return f"{prefix}{text}{suffix}"
 
 
-def _rank_lines(scans: list[ScanResult], fmt) -> str:
-    if not scans:
-        return "—"
-    lines = [fmt(scan, idx + 1) for idx, scan in enumerate(scans[:10])]
-    return "\n".join(lines)[:1024]
+def _top_gainers(scans: list[ScanResult], *, limit: int = 15) -> list[ScanResult]:
+    ranked = sorted(
+        scans,
+        key=lambda scan: (
+            scan.session_change_pct if scan.session_change_pct is not None else -999,
+            scan.score,
+            scan.turnover_usd or 0,
+        ),
+        reverse=True,
+    )
+    movers = [scan for scan in ranked if (scan.session_change_pct or 0) > 0]
+    return movers[:limit]
+
+
+def build_live_summary_embed(
+    scans: list[ScanResult],
+    *,
+    top_limit: int = 15,
+    updated_at: datetime | None = None,
+) -> discord.Embed:
+    now = updated_at or datetime.now(_ET)
+    gainers = _top_gainers(scans, limit=top_limit)
+
+    if gainers:
+        lines = []
+        for idx, scan in enumerate(gainers, start=1):
+            pct = scan.session_change_pct
+            pct_text = f"{pct:+.1f}%" if pct is not None else "—"
+            lines.append(
+                f"`{idx:02d}` **{scan.symbol}** · {pct_text} · "
+                f"RVol {_compact_number(scan.current_rvol or scan.rvol, suffix='x')} · "
+                f"Score {scan.grade} {scan.score}/100"
+            )
+        body = "\n".join(lines)
+    else:
+        body = "Waiting for scanner data…"
+
+    embed = discord.Embed(
+        title="📊 Top Gainers (Live)",
+        description=body[:4096],
+        color=discord.Color.from_rgb(88, 101, 242),
+    )
+    embed.set_footer(
+        text=(
+            f"Last update: {now.strftime('%I:%M:%S %p ET').lstrip('0')} · "
+            f"Top {top_limit} · {len(scans)} symbols scanned"
+        )
+    )
+    return embed
 
 
 def build_summary_embed(scans: list[ScanResult]) -> discord.Embed:
-    embed = discord.Embed(
-        title="📊 Market Summary",
-        description="Relative rankings from the latest scanner cycle.",
-        color=discord.Color.from_rgb(88, 101, 242),
-    )
-
-    by_liquidity = sorted(
-        scans,
-        key=lambda s: (s.liquidity_percentile or 0, s.turnover_usd or 0),
-        reverse=True,
-    )
-    embed.add_field(
-        name="Relative Liquidity Ranking",
-        value=_rank_lines(
-            by_liquidity,
-            lambda s, r: f"`{r}` **{s.symbol}** · turnover {_compact_number(s.turnover_usd, prefix='$')} · rank #{s.liquidity_rank or '—'}",
-        ),
-        inline=False,
-    )
-
-    by_peak = sorted(scans, key=lambda s: s.peak_rvol or 0, reverse=True)
-    embed.add_field(
-        name="Peak RVOL Ranking",
-        value=_rank_lines(
-            by_peak,
-            lambda s, r: f"`{r}` **{s.symbol}** · peak {_compact_number(s.peak_rvol, suffix='x')} @ {s.peak_rvol_at or '—'}",
-        ),
-        inline=False,
-    )
-
-    by_turnover_accel = sorted(
-        scans,
-        key=lambda s: (s.expansion.turnover_expansion_pct if s.expansion else None) or -999,
-        reverse=True,
-    )
-    embed.add_field(
-        name="Turnover Acceleration",
-        value=_rank_lines(
-            by_turnover_accel,
-            lambda s, r: (
-                f"`{r}` **{s.symbol}** · "
-                f"{(s.expansion.turnover_expansion_pct if s.expansion else None) or 0:+.1f}%"
-            ),
-        ),
-        inline=False,
-    )
-
-    by_structure = sorted(
-        scans,
-        key=lambda s: s.structure.quality_score if s.structure else 0,
-        reverse=True,
-    )
-    embed.add_field(
-        name="Market Structure Quality",
-        value=_rank_lines(
-            by_structure,
-            lambda s, r: (
-                f"`{r}` **{s.symbol}** · {s.structure.quality_score if s.structure else 0}/100 · "
-                f"{s.market_structure_state.title()}"
-            ),
-        ),
-        inline=False,
-    )
-
-    by_runner = sorted(scans, key=lambda s: s.historical_runner_score, reverse=True)
-    embed.add_field(
-        name="Historical Runner Score",
-        value=_rank_lines(
-            by_runner,
-            lambda s, r: f"`{r}` **{s.symbol}** · {s.historical_runner_score}/100",
-        ),
-        inline=False,
-    )
-
-    by_persistence = sorted(scans, key=lambda s: s.liquidity_persistence_score or 0, reverse=True)
-    embed.add_field(
-        name="Liquidity Persistence Score",
-        value=_rank_lines(
-            by_persistence,
-            lambda s, r: f"`{r}` **{s.symbol}** · {s.liquidity_persistence_score or 0}/100",
-        ),
-        inline=False,
-    )
-
-    embed.set_footer(text=f"Symbols scanned: {len(scans)}")
-    return embed
+    return build_live_summary_embed(scans)

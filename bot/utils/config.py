@@ -29,7 +29,7 @@ class NewsConfig:
     openai_model: str = "gpt-4o-mini"
     openai_api_key: str = ""
     benzinga_feed_enabled: bool = False
-    benzinga_poll_interval_seconds: int = 20
+    benzinga_poll_interval_seconds: int = 15
 
 
 @dataclass
@@ -121,7 +121,16 @@ class TradingConfig:
     universe_movers_top: int = 50
     realtime_max_symbols_per_cycle: int = 100
     realtime_batch_rotation: bool = True
-    summary_interval_seconds: int = 300
+    summary_interval_seconds: int = 60
+    summary_live_tick_seconds: int = 30
+    summary_top_gainers_limit: int = 15
+    potential_enabled: bool = True
+    potential_min_score: int = 45
+    potential_min_session_change_pct: float = 2.0
+    potential_max_session_change_pct: float = 25.0
+    potential_max_alerts_per_batch: int = 5
+    potential_alert_cooldown_seconds: int = 900
+    potential_retention_days: int = 5
     unusual_whales_enabled: bool = True
     tradingview_enabled: bool = True
     tradingview_exchange: str = "NASDAQ"
@@ -158,6 +167,7 @@ class Settings:
     summary_channel_id: int
     news_channel_id: int
     mosquito_channel_id: int
+    potential_channel_id: int
     alpaca_api_key: str
     alpaca_secret_key: str
     alpaca_paper: bool
@@ -231,6 +241,7 @@ def load_settings() -> Settings:
     summary_channel = os.getenv("SUMMARY_CHANNEL_ID", "").strip()
     news_channel = os.getenv("NEWS_CHANNEL_ID", "").strip()
     mosquito_channel = os.getenv("MOSQUITO_CHANNEL_ID", "").strip()
+    potential_channel = os.getenv("POTENTIAL_CHANNEL_ID", "").strip()
     user_token = os.getenv("DISCORD_USER_TOKEN", "").strip()
     user_email = os.getenv("DISCORD_USER_EMAIL", "").strip()
     user_password = os.getenv("DISCORD_USER_PASSWORD", "").strip()
@@ -281,7 +292,7 @@ def load_settings() -> Settings:
                 "benzinga_feed_enabled",
                 bool(benzinga_api_key),
             ),
-            benzinga_poll_interval_seconds=int(news_raw.get("benzinga_poll_interval_seconds", 20)),
+            benzinga_poll_interval_seconds=int(news_raw.get("benzinga_poll_interval_seconds", 15)),
         ),
         trading=TradingConfig(
             enabled=trading_raw["enabled"],
@@ -373,7 +384,22 @@ def load_settings() -> Settings:
             universe_movers_top=int(trading_raw.get("universe_movers_top", 50)),
             realtime_max_symbols_per_cycle=int(trading_raw.get("realtime_max_symbols_per_cycle", 100)),
             realtime_batch_rotation=trading_raw.get("realtime_batch_rotation", True),
-            summary_interval_seconds=int(trading_raw.get("summary_interval_seconds", 300)),
+            summary_interval_seconds=int(trading_raw.get("summary_interval_seconds", 60)),
+            summary_live_tick_seconds=int(trading_raw.get("summary_live_tick_seconds", 30)),
+            summary_top_gainers_limit=int(trading_raw.get("summary_top_gainers_limit", 15)),
+            potential_enabled=trading_raw.get("potential_enabled", True),
+            potential_min_score=int(trading_raw.get("potential_min_score", 45)),
+            potential_min_session_change_pct=float(
+                trading_raw.get("potential_min_session_change_pct", 2.0)
+            ),
+            potential_max_session_change_pct=float(
+                trading_raw.get("potential_max_session_change_pct", 25.0)
+            ),
+            potential_max_alerts_per_batch=int(trading_raw.get("potential_max_alerts_per_batch", 5)),
+            potential_alert_cooldown_seconds=int(
+                trading_raw.get("potential_alert_cooldown_seconds", 900)
+            ),
+            potential_retention_days=int(trading_raw.get("potential_retention_days", 5)),
             unusual_whales_enabled=trading_raw.get("unusual_whales_enabled", True),
             tradingview_enabled=trading_raw.get("tradingview_enabled", True),
             tradingview_exchange=str(trading_raw.get("tradingview_exchange", "NASDAQ")),
@@ -395,6 +421,7 @@ def load_settings() -> Settings:
         summary_channel_id=int(summary_channel) if summary_channel else 0,
         news_channel_id=int(news_channel) if news_channel else forward_dest_id,
         mosquito_channel_id=int(mosquito_channel) if mosquito_channel else 0,
+        potential_channel_id=int(potential_channel) if potential_channel else 0,
         alpaca_api_key=os.getenv("ALPACA_API_KEY", "").strip(),
         alpaca_secret_key=os.getenv("ALPACA_SECRET_KEY", "").strip(),
         alpaca_paper=os.getenv("ALPACA_PAPER", "true").strip().lower() == "true",

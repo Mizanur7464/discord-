@@ -2,9 +2,18 @@
 
 from __future__ import annotations
 
+import html
 import re
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from bot.news.benzinga import BenzingaArticle
+
+_ET = ZoneInfo("America/New_York")
+
+
+def _decode_text(text: str) -> str:
+    return html.unescape(str(text or "")).strip()
 
 
 def _fmt_float_millions(shares: float | None) -> str:
@@ -16,8 +25,18 @@ def _fmt_float_millions(shares: float | None) -> str:
     return f"{millions:.1f} M"
 
 
+def _format_published_et(published: str) -> str:
+    if not published:
+        return ""
+    try:
+        dt = datetime.fromisoformat(published.replace("Z", "+00:00"))
+        return dt.astimezone(_ET).strftime("%I:%M %p ET").lstrip("0")
+    except (TypeError, ValueError):
+        return ""
+
+
 def _headline_for_symbol(article: BenzingaArticle, symbol: str) -> str:
-    title = article.title.strip()
+    title = _decode_text(article.title)
     if not symbol:
         return title
     upper = symbol.upper()
@@ -41,12 +60,13 @@ def build_benzinga_news_line(
     country_flag: str = "",
     company_name: str = "",
 ) -> str:
-    """Nuntio row: `42.5 M` 🇺🇸 **TICKER**: headline - Link."""
+    """Nuntio row: **01:52 PM ET** | `42.5 M` 🇺🇸 **TICKER**: headline - Link."""
     _ = company_name
     symbol = (symbol or (article.symbols[0] if article.symbols else "")).upper()
     headline = _headline_for_symbol(article, symbol)
 
     prefix_parts: list[str] = []
+    published_et = _format_published_et(article.published)
     float_text = _fmt_float_millions(float_shares)
     if float_text:
         prefix_parts.append(f"`{float_text}`")
@@ -56,11 +76,16 @@ def build_benzinga_news_line(
         prefix_parts.append(f"**{symbol}**")
 
     if prefix_parts and headline:
-        line = f"{' '.join(prefix_parts)}: {headline}".strip()
+        row = f"{' '.join(prefix_parts)}: {headline}".strip()
     elif prefix_parts:
-        line = " ".join(prefix_parts).strip()
+        row = " ".join(prefix_parts).strip()
     else:
-        line = headline
+        row = headline
+
+    if published_et and row:
+        line = f"**{published_et}** | {row}"
+    else:
+        line = row
 
     if article.url:
         line = f"{line} - [Link]({article.url})" if line else f"[Link]({article.url})"

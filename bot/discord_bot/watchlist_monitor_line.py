@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -55,9 +56,14 @@ def _status_tags(scan: ScanResult) -> list[str]:
     return tags[:3]
 
 
+def format_monitor_clock(now: datetime | None = None) -> str:
+    clock = (now or datetime.now(_ET)).strftime("%I:%M:%S %p ET").lstrip("0")
+    return clock
+
+
 def build_watchlist_monitor_line(scan: ScanResult, *, country_flag: str = "🇺🇸") -> str:
     """Compact NB / nuntio-std monitoring list row."""
-    clock = datetime.now(_ET).strftime("%H:%M")
+    clock = format_monitor_clock()
     rank = scan.liquidity_rank or scan.peak_rvol_rank
 
     head_parts = [clock, _arrow(scan.session_change_pct), f"**{scan.symbol}**", _price_level_tag(scan.price)]
@@ -91,23 +97,51 @@ def build_watchlist_monitor_line(scan: ScanResult, *, country_flag: str = "🇺�
 
 
 class ScanDetailView(discord.ui.View):
-    """Button to post full scanner embed on click."""
+    """Compact Details button — ephemeral full scanner embed."""
 
-    def __init__(self, bot, symbol: str, *, title_prefix: str):
+    def __init__(
+        self,
+        bot,
+        symbol: str,
+        *,
+        title_prefix: str,
+        related_news_title: str = "",
+        related_news_url: str = "",
+    ):
         super().__init__(timeout=3600)
         self._bot = bot
         self._symbol = symbol.upper()
         self._title_prefix = title_prefix
-
-    @discord.ui.button(label="Details", style=discord.ButtonStyle.primary, emoji="🔎")
-    async def show_details(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        cached = self._bot._scan_detail_cache.get(self._symbol)
-        if not cached:
-            await interaction.response.send_message(
-                f"No cached scan for `{self._symbol}` — try `/scan {self._symbol}`.",
-                ephemeral=True,
+        self._related_news_title = related_news_title
+        self._related_news_url = related_news_url
+        if related_news_url:
+            self.add_item(
+                discord.ui.Button(label="Link", style=discord.ButtonStyle.link, url=related_news_url)
             )
-            return
-        scan, min_score = cached
-        embed = build_scan_embed(scan, min_score=min_score, title_prefix=self._title_prefix)
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @discord.ui.button(label="Details", style=discord.ButtonStyle.secondary)
+    async def show_details(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await interaction.response.defer(ephemeral=True)
+        try:
+            scan = await asyncio.to_thread(self._bot.scanner.scan, self._symbol)
+        except Exception:
+            cached = self._bot._scan_detail_cache.get(self._symbol)
+            if not cached:
+                await interaction.followup.send(
+                    f"No scan for `{self._symbol}` — try `/scan {self._symbol}`.",
+                    ephemeral=True,
+                )
+                return
+            scan, _ = cached
+
+        min_score = self._bot._scanner_min_score(scan)
+        self._bot._scan_detail_cache[self._symbol] = (scan, min_score)
+        title, url = self._bot._related_news_for_symbol(self._symbol)
+        embed = build_scan_embed(
+            scan,
+            min_score=min_score,
+            title_prefix=self._title_prefix,
+            related_news_title=title or self._related_news_title,
+            related_news_url=url or self._related_news_url,
+        )
+        await interaction.followup.send(embed=embed, ephemeral=True)

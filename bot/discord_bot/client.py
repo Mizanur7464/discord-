@@ -18,6 +18,7 @@ from bot.news.watchlist import WatchEntry, WatchTrigger, WatchlistStore
 from bot.trading.data_providers import build_data_provider
 from bot.trading.engine import TradingEngine
 from bot.trading.historical_watchlist import HistoricalWatchlistStore
+from bot.trading.potential_store import PotentialStore
 from bot.trading.realtime_scanner import RealtimeScanner
 from bot.trading.runner_history import RunnerHistoryStore
 from bot.trading.scanner import ScanResult, SymbolScanner
@@ -96,7 +97,12 @@ class NewsTradingBot(commands.Bot):
             watchlist_symbols_fn=self._collect_scan_symbols,
             watchlist_activity_fn=self._watchlist_activity_for,
         )
-        self.summary_publisher = SummaryPublisher()
+        self.potential_store = PotentialStore(
+            retention_days=settings.trading.potential_retention_days,
+        )
+        self.summary_publisher = SummaryPublisher(
+            top_limit=settings.trading.summary_top_gainers_limit,
+        )
         self.benzinga_feed: BenzingaFeedPoller | None = None
         if settings.benzinga_api_key and settings.news.benzinga_feed_enabled:
             self.benzinga_feed = BenzingaFeedPoller(
@@ -127,9 +133,12 @@ class NewsTradingBot(commands.Bot):
         self._summary_channel: discord.TextChannel | None = None
         self._news_channel: discord.TextChannel | None = None
         self._mosquito_channel: discord.TextChannel | None = None
+        self._potential_channel: discord.TextChannel | None = None
         self._mosquito_recent: dict[str, float] = {}
         self._watchlist_recent: dict[str, float] = {}
+        self._potential_recent: dict[str, float] = {}
         self._watchlist_batch_sent: int = 0
+        self._potential_batch_sent: int = 0
         cfg = settings.trading
         self._mosquito_automute = MosquitoAutoMute(
             window_seconds=cfg.mosquito_automute_window_seconds,
@@ -225,6 +234,13 @@ class NewsTradingBot(commands.Bot):
             else:
                 logger.warning("Mosquito channel not found. Check MOSQUITO_CHANNEL_ID.")
 
+        if self.settings.potential_channel_id:
+            potential_channel = self.get_channel(self.settings.potential_channel_id)
+            if isinstance(potential_channel, discord.TextChannel):
+                self._potential_channel = potential_channel
+            else:
+                logger.warning("Potential channel not found. Check POTENTIAL_CHANNEL_ID.")
+
         if self.settings.bot.auto_start:
             self._monitoring = True
 
@@ -243,55 +259,69 @@ class NewsTradingBot(commands.Bot):
     async def _benzinga_feed_loop(self) -> None:
         if not self.benzinga_feed:
             return
-        interval = max(15, self.settings.news.benzinga_poll_interval_seconds)
+        interval = max(10, self.settings.news.benzinga_poll_interval_seconds)
         logger.info("Benzinga news feed started (every %ss)", interval)
         while True:
             try:
                 articles = await asyncio.to_thread(self.benzinga_feed.poll_new)
                 for article in articles:
-                    await self._ingest_benzinga_article(article)
+                    task = asyncio.create_task(self._ingest_benzinga_article(article))
+                    self._background_tasks.append(task)
             except Exception as exc:
                 logger.warning("Benzinga feed loop failed: %s", exc)
             await asyncio.sleep(interval)
 
-    async def _ingest_benzinga_article(self, article) -> None:
+    async def _benzinga_symbol_rows(
+        self, symbols: list[str]
+    ) -> list[tuple[str, float | None, str]]:
+        if not symbols:
+            return [("", None, "🇺🇸")]
+        if not self.settings.finnhub_api_key:
+            return [(symbol, None, "🇺🇸") for symbol in symbols]
+
+        from bot.trading.market_data import fetch_company_profile_sync, fetch_float_shares_sync
+
+        async def _row(symbol: str) -> tuple[str, float | None, str]:
+            if not symbol:
+                return ("", None, "🇺🇸")
+            float_shares, profile = await asyncio.gather(
+                asyncio.to_thread(
+                    fetch_float_shares_sync,
+                    symbol,
+                    self.settings.finnhub_api_key,
+                    massive_api_key=self.settings.benzinga_api_key,
+                ),
+                asyncio.to_thread(
+                    fetch_company_profile_sync, symbol, self.settings.finnhub_api_key
+                ),
+            )
+            _, country_flag = profile
+            return (symbol, float_shares, country_flag or "🇺🇸")
+
+        return list(await asyncio.gather(*[_row(symbol) for symbol in symbols]))
+
+    async def _post_benzinga_news(self, article) -> None:
+        from bot.news.benzinga import BenzingaArticle
+
+        if not isinstance(article, BenzingaArticle) or not self._news_channel:
+            return
+        symbols = article.symbols or [""]
+        try:
+            symbol_rows = await asyncio.wait_for(self._benzinga_symbol_rows(symbols), timeout=5.0)
+        except TimeoutError:
+            logger.warning("Benzinga news metadata timeout for %s", symbols)
+            symbol_rows = [(symbol, None, "🇺🇸") for symbol in symbols]
+            content = build_benzinga_news_post(article, symbol_rows=symbol_rows)
+            await self._news_channel.send(content, suppress_embeds=True)
+        for symbol in article.symbols:
+            await self._maybe_send_potential_hit(symbol, article)
+
+    async def _process_benzinga_article_ai(self, article) -> None:
         from bot.news.benzinga import BenzingaArticle
 
         if not isinstance(article, BenzingaArticle):
             return
         symbol = article.symbols[0] if article.symbols else ""
-        if self._news_channel:
-            symbol_rows: list[tuple[str, float | None, str]] = []
-            symbols = article.symbols or [""]
-            if self.settings.finnhub_api_key:
-                from bot.trading.market_data import (
-                    fetch_company_profile_sync,
-                    fetch_float_shares_sync,
-                )
-
-                for symbol in symbols:
-                    if not symbol:
-                        symbol_rows.append(("", None, "🇺🇸"))
-                        continue
-                    float_shares, profile = await asyncio.gather(
-                        asyncio.to_thread(
-                            fetch_float_shares_sync,
-                            symbol,
-                            self.settings.finnhub_api_key,
-                            massive_api_key=self.settings.benzinga_api_key,
-                        ),
-                        asyncio.to_thread(
-                            fetch_company_profile_sync, symbol, self.settings.finnhub_api_key
-                        ),
-                    )
-                    _, country_flag = profile
-                    symbol_rows.append((symbol, float_shares, country_flag or "🇺🇸"))
-            else:
-                symbol_rows = [(symbol, None, "🇺🇸") for symbol in symbols]
-
-            content = build_benzinga_news_post(article, symbol_rows=symbol_rows)
-            await self._news_channel.send(content, suppress_embeds=True)
-
         text = article.title if not article.body else f"{article.title}\n{article.body[:4000]}"
         item = await self.analyzer.analyze_text_async(
             text,
@@ -310,15 +340,29 @@ class NewsTradingBot(commands.Bot):
         await self.send_news_alert(item, trade_msg)
         logger.info("Benzinga article processed: %s", article.title[:80])
 
+    async def _ingest_benzinga_article(self, article) -> None:
+        try:
+            await self._post_benzinga_news(article)
+            await self._process_benzinga_article_ai(article)
+        except Exception as exc:
+            logger.warning("Benzinga ingest failed: %s", exc)
+
     async def _summary_loop(self) -> None:
-        interval = max(60, self.settings.trading.summary_interval_seconds)
+        interval = max(30, self.settings.trading.summary_interval_seconds)
+        tick = max(10, self.settings.trading.summary_live_tick_seconds)
+        elapsed = 0
         while True:
             try:
                 if self._summary_channel:
-                    await self.summary_publisher.publish(self._summary_channel)
+                    if elapsed >= interval:
+                        await self.summary_publisher.publish(self._summary_channel)
+                        elapsed = 0
+                    else:
+                        await self.summary_publisher.tick_footer(self._summary_channel)
             except Exception as exc:
                 logger.warning("Summary publish failed: %s", exc)
-            await asyncio.sleep(interval)
+            await asyncio.sleep(tick)
+            elapsed += tick
 
     async def _exit_monitor_loop(self) -> None:
         cfg = self.settings.trading
@@ -426,7 +470,14 @@ class NewsTradingBot(commands.Bot):
             )
 
         content = build_watchlist_monitor_line(scan, country_flag=country_flag)
-        view = ScanDetailView(self, scan.symbol, title_prefix=title_prefix)
+        news_title, news_url = self._related_news_for_symbol(scan.symbol)
+        view = ScanDetailView(
+            self,
+            scan.symbol,
+            title_prefix=title_prefix,
+            related_news_title=news_title,
+            related_news_url=news_url,
+        )
         await channel.send(content=content, view=view)
 
         if on_watchlist_channel:
@@ -436,6 +487,123 @@ class NewsTradingBot(commands.Bot):
 
     def reset_watchlist_batch_counter(self) -> None:
         self._watchlist_batch_sent = 0
+
+    def reset_potential_batch_counter(self) -> None:
+        self._potential_batch_sent = 0
+
+    def _related_news_for_symbol(self, symbol: str) -> tuple[str, str]:
+        symbol = symbol.upper()
+        potential = self.potential_store.get(symbol)
+        if potential and (potential.related_news_title or potential.related_news_url):
+            return potential.related_news_title, potential.related_news_url
+        for entry in self.watchlist.active_entries():
+            if entry.symbol == symbol:
+                return entry.title, entry.link
+        return "", ""
+
+    def _qualifies_potential(self, scan: ScanResult) -> bool:
+        cfg = self.settings.trading
+        if not cfg.potential_enabled:
+            return False
+        if scan.score < cfg.potential_min_score:
+            return False
+        pct = scan.session_change_pct
+        if pct is None:
+            return False
+        if pct < cfg.potential_min_session_change_pct:
+            return False
+        if pct >= cfg.potential_max_session_change_pct:
+            return False
+        rvol = scan.current_rvol or scan.rvol or 0.0
+        liquidity = float(scan.liquidity_expansion or 0)
+        if rvol < 1.5 and liquidity < 35:
+            return False
+        return True
+
+    async def _process_potential_batch(self, scans: list[ScanResult]) -> None:
+        if not self._potential_channel or not self.settings.trading.potential_enabled:
+            return
+        import time
+
+        candidates = [scan for scan in scans if self._qualifies_potential(scan)]
+        if not candidates:
+            return
+        candidates.sort(
+            key=lambda scan: (
+                scan.score,
+                scan.liquidity_expansion or 0,
+                scan.current_rvol or scan.rvol or 0,
+            ),
+            reverse=True,
+        )
+        limit = max(1, self.settings.trading.potential_max_alerts_per_batch)
+        now = time.time()
+        cooldown = self.settings.trading.potential_alert_cooldown_seconds
+        for scan in candidates[:limit]:
+            if self._potential_batch_sent >= limit:
+                break
+            if now - self._potential_recent.get(scan.symbol, 0) < cooldown:
+                continue
+            self.potential_store.add_or_update(
+                symbol=scan.symbol,
+                score=scan.score,
+                grade=scan.grade,
+                session_change_pct=scan.session_change_pct,
+                reasons=scan.reasons[:4] or [f"Score {scan.score}/100"],
+            )
+            await self._send_potential_alert(scan)
+            self._potential_recent[scan.symbol] = now
+            self._potential_batch_sent += 1
+
+    async def _send_potential_alert(self, scan: ScanResult) -> None:
+        if not self._potential_channel:
+            return
+        min_score = self._scanner_min_score(scan)
+        self._scan_detail_cache[scan.symbol.upper()] = (scan, min_score)
+        country_flag = "🇺🇸"
+        if scan.symbol and self.settings.finnhub_api_key:
+            from bot.trading.market_data import fetch_company_profile_sync
+
+            _, country_flag = await asyncio.to_thread(
+                fetch_company_profile_sync, scan.symbol, self.settings.finnhub_api_key
+            )
+        content = build_watchlist_monitor_line(scan, country_flag=country_flag)
+        news_title, news_url = self._related_news_for_symbol(scan.symbol)
+        view = ScanDetailView(
+            self,
+            scan.symbol,
+            title_prefix="Potential",
+            related_news_title=news_title,
+            related_news_url=news_url,
+        )
+        await self._potential_channel.send(content=content, view=view)
+
+    async def _maybe_send_potential_hit(self, symbol: str, article) -> None:
+        if not symbol or not self.potential_store.has_active(symbol):
+            return
+        entry = self.potential_store.attach_news(
+            symbol,
+            title=article.title,
+            url=article.url,
+        )
+        if not entry or not self._alert_channel:
+            return
+        self.potential_store.mark_hit(symbol)
+        embed = discord.Embed(
+            title=f"🎯 HIT — {symbol.upper()}",
+            description=(
+                f"Our **potential list** flagged `{symbol.upper()}` before this headline landed.\n\n"
+                f"**{article.title[:900]}**"
+            ),
+            color=discord.Color.green(),
+            url=article.url or None,
+        )
+        embed.add_field(name="Potential Score", value=f"{entry.grade} {entry.score}/100", inline=True)
+        if entry.session_change_pct is not None:
+            embed.add_field(name="Move at flag", value=f"{entry.session_change_pct:+.1f}%", inline=True)
+        embed.set_footer(text="Potential channel → news match · bot accuracy")
+        await self._alert_channel.send(embed=embed)
+        logger.info("Potential HIT alert for %s", symbol)
 
     async def _maybe_notify_watchlist_mute(self) -> None:
         import time
@@ -456,6 +624,8 @@ class NewsTradingBot(commands.Bot):
 
     async def _on_scan_batch(self, scans: list[ScanResult]) -> None:
         self.reset_watchlist_batch_counter()
+        self.reset_potential_batch_counter()
+        await self._process_potential_batch(scans)
         if not self.settings.trading.mosquito_alerts_enabled:
             return
         candidates = [scan for scan in scans if self._qualifies_mosquito(scan)]

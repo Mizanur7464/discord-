@@ -16,7 +16,7 @@ news:
   ai_sentiment_enabled: true    # all buy/ignore/neutral signals decided by OpenAI
   openai_model: gpt-4o-mini
   benzinga_feed_enabled: true   # licensed news from Benzinga API (replaces NB news)
-  benzinga_poll_interval_seconds: 20   # faster poll (was 60); needs Benzinga Pro for best speed
+  benzinga_poll_interval_seconds: 15   # poll Massive Benzinga news (was 20)
 
   allowed_url_domains:
     - news.nuntiobot.com
@@ -148,7 +148,16 @@ trading:
   universe_movers_top: 50
   realtime_max_symbols_per_cycle: 100
   realtime_batch_rotation: true         # rotate through full 2k watchlist in batches
-  summary_interval_seconds: 300        # post rankings to #summary-channel every 5 min
+  summary_interval_seconds: 60         # refresh top-gainer data
+  summary_live_tick_seconds: 30        # edit same message for live clock
+  summary_top_gainers_limit: 15        # SPM/NB style top movers only
+  potential_enabled: true             # pre-gainer potential channel
+  potential_min_score: 45
+  potential_min_session_change_pct: 2
+  potential_max_session_change_pct: 25  # skip names already extended
+  potential_max_alerts_per_batch: 5
+  potential_alert_cooldown_seconds: 900
+  potential_retention_days: 5
   unusual_whales_enabled: false
   tradingview_enabled: false
   tradingview_exchange: NASDAQ

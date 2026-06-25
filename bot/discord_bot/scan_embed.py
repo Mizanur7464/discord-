@@ -93,6 +93,8 @@ def build_scan_embed(
     *,
     min_score: int,
     title_prefix: str = "Realtime Scanner",
+    related_news_title: str = "",
+    related_news_url: str = "",
 ) -> discord.Embed:
     actionable = scan.score >= min_score
     status = "✅ Actionable setup" if actionable else f"⏸ Below threshold ({min_score})"
@@ -155,6 +157,33 @@ def build_scan_embed(
 
     if scan.timeframes and scan.timeframes.summary:
         embed.add_field(name="⏱ Timeframes", value=scan.timeframes.summary[:1024], inline=False)
+
+    if scan.catalyst and scan.catalyst.headline:
+        catalyst_lines = [scan.catalyst.headline[:900]]
+        if scan.catalyst.url:
+            catalyst_lines.append(f"[Benzinga]({scan.catalyst.url})")
+        embed.add_field(name="📰 Benzinga Catalyst", value="\n".join(catalyst_lines)[:1024], inline=False)
+
+    if related_news_title:
+        news_lines = [related_news_title[:900]]
+        if related_news_url:
+            news_lines.append(f"[Related news]({related_news_url})")
+        embed.add_field(name="📰 Related News", value="\n".join(news_lines)[:1024], inline=False)
+
+    if scan.indicators:
+        ind = scan.indicators
+        embed.add_field(
+            name="📈 Indicators",
+            value=_table(
+                [
+                    ("VWAP", _compact_number(ind.vwap, prefix="$")),
+                    ("RVOL", _compact_number(ind.rvol, suffix="x") if ind.rvol is not None else "—"),
+                    ("MA Fast", _compact_number(ind.ma_fast, prefix="$")),
+                    ("MA Slow", _compact_number(ind.ma_slow, prefix="$")),
+                ]
+            ),
+            inline=True,
+        )
 
     if scan.reasons:
         embed.add_field(

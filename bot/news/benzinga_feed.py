@@ -19,7 +19,7 @@ class BenzingaFeedPoller:
         *,
         api_key: str,
         provider: str = "massive",
-        page_size: int = 25,
+        page_size: int = 100,
         max_seen: int = 2000,
     ):
         self.api_key = api_key
@@ -51,7 +51,7 @@ class BenzingaFeedPoller:
     def poll_new(self) -> list[BenzingaArticle]:
         articles = fetch_recent_news(self.api_key, page_size=self.page_size, provider=self.provider)
         fresh: list[BenzingaArticle] = []
-        for article in reversed(articles):
+        for article in articles:
             if article.article_id in self._seen_ids:
                 continue
             self._seen_ids.add(article.article_id)
