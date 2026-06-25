@@ -275,7 +275,10 @@ class NewsTradingBot(commands.Bot):
                         continue
                     float_shares, profile = await asyncio.gather(
                         asyncio.to_thread(
-                            fetch_float_shares_sync, symbol, self.settings.finnhub_api_key
+                            fetch_float_shares_sync,
+                            symbol,
+                            self.settings.finnhub_api_key,
+                            massive_api_key=self.settings.benzinga_api_key,
                         ),
                         asyncio.to_thread(
                             fetch_company_profile_sync, symbol, self.settings.finnhub_api_key

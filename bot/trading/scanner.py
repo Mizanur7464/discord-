@@ -218,7 +218,9 @@ class SymbolScanner:
         if result.float_shares is None and self._finnhub_api_key:
             from bot.trading.market_data import fetch_float_shares_sync
 
-            result.float_shares = fetch_float_shares_sync(symbol, self._finnhub_api_key)
+            result.float_shares = fetch_float_shares_sync(
+                symbol, self._finnhub_api_key, massive_api_key=self._benzinga_api_key
+            )
 
         if mosquito_signal:
             result.mosquito_confirmed = True
