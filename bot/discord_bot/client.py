@@ -563,16 +563,9 @@ class NewsTradingBot(commands.Bot):
                 fetch_company_profile_sync, scan.symbol, self.settings.finnhub_api_key
             )
 
-        news_title, news_url = self._related_news_for_symbol(scan.symbol)
+        _, news_url = self._related_news_for_symbol(scan.symbol)
         content = build_watchlist_monitor_line(scan, country_flag=country_flag, news_url=news_url)
-        view = ScanDetailView(
-            self,
-            scan.symbol,
-            title_prefix=title_prefix,
-            related_news_title=news_title,
-            related_news_url=news_url,
-        )
-        await channel.send(content=content, view=view, suppress_embeds=True)
+        await channel.send(content=content, suppress_embeds=True)
 
         if on_watchlist_channel:
             self._watchlist_recent[scan.symbol] = time.time()
