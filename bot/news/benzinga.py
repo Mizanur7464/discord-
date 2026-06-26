@@ -100,16 +100,21 @@ def _fetch_news_payload(
     symbols: str = "",
     page_size: int = 25,
     provider: str = "massive",
+    page: int = 0,
+    published_gte: str = "",
 ) -> list[dict]:
-    page_size = max(1, min(page_size, 100))
     if provider == "direct":
+        # Direct Benzinga: pageSize max 100, paginate with `page` offset.
+        page_size = max(1, min(page_size, 100))
         query = (
             f"https://api.benzinga.com/api/v2/news"
-            f"?token={quote(api_key)}&pageSize={page_size}&displayOutput=full"
+            f"?token={quote(api_key)}&pageSize={page_size}&page={max(0, page)}&displayOutput=full"
         )
         if symbols:
             query += f"&tickers={quote(symbols.upper())}"
     else:
+        # Massive proxy: limit up to 50000, supports published.gte delta filtering.
+        page_size = max(1, min(page_size, 50000))
         params: dict[str, str | int] = {
             "apiKey": api_key,
             "limit": page_size,
@@ -117,8 +122,10 @@ def _fetch_news_payload(
         }
         if symbols:
             params["tickers"] = symbols.upper()
+        if published_gte:
+            params["published.gte"] = published_gte
         query = f"https://api.massive.com/benzinga/v2/news?{urlencode(params)}"
-    with urlopen(Request(query, headers={"Accept": "application/json", "User-Agent": "discord-news-bot/1.0"}), timeout=15) as resp:
+    with urlopen(Request(query, headers={"Accept": "application/json", "User-Agent": "discord-news-bot/1.0"}), timeout=20) as resp:
         raw = resp.read().decode("utf-8", errors="ignore")
     if raw.lstrip().startswith("<"):
         logger.warning("Benzinga news API returned non-JSON payload")
@@ -127,11 +134,24 @@ def _fetch_news_payload(
     return _news_items_from_payload(payload)
 
 
-def fetch_recent_news(api_key: str, *, page_size: int = 25, provider: str = "massive") -> list[BenzingaArticle]:
+def fetch_recent_news(
+    api_key: str,
+    *,
+    page_size: int = 25,
+    provider: str = "massive",
+    page: int = 0,
+    published_gte: str = "",
+) -> list[BenzingaArticle]:
     if not api_key:
         return []
     try:
-        items = _fetch_news_payload(api_key, page_size=page_size, provider=provider)
+        items = _fetch_news_payload(
+            api_key,
+            page_size=page_size,
+            provider=provider,
+            page=page,
+            published_gte=published_gte,
+        )
         articles = [parse_benzinga_article(item) for item in items]
         return [article for article in articles if article]
     except Exception as exc:
