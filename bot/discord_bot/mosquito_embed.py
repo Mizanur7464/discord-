@@ -66,19 +66,23 @@ def _tags(scan: ScanResult) -> str:
     return f"  {' '.join(tags)}" if tags else ""
 
 
+# NB-style dim pipe separator between fields.
+_SEP = "  \x1b[2;37m|\x1b[0m  "
+
+
 def _format_spm_row(scan: ScanResult) -> str:
     v1 = _format_bar_volume(scan.volume_1m)
     v2 = _format_bar_volume(scan.volume_2m)
     v5 = _format_bar_volume(scan.volume_5m, compact=True)
     v1d = _format_bar_volume(scan.daily_volume, compact=True)
     return (
-        f"{_rank_label(scan)}  {_pct_ansi(scan.session_change_pct)}  "
-        f"\x1b[1;37m{scan.symbol}\x1b[0m{_tags(scan)}  "
-        f"\x1b[2;36m$ {_format_price(scan.price)}\x1b[0m  "
-        f"\x1b[2;33m1m:\x1b[0m {v1}  "
-        f"\x1b[2;33m2m:\x1b[0m {v2}  "
-        f"\x1b[2;33m5m:\x1b[0m {v5}  "
-        f"\x1b[2;34m1D:\x1b[0m {v1d}  "
+        f"{_rank_label(scan)}  {_pct_ansi(scan.session_change_pct)}{_SEP}"
+        f"\x1b[1;37m{scan.symbol}\x1b[0m{_tags(scan)}{_SEP}"
+        f"\x1b[2;36m$ {_format_price(scan.price)}\x1b[0m{_SEP}"
+        f"\x1b[2;33m1m:\x1b[0m {v1}{_SEP}"
+        f"\x1b[2;33m2m:\x1b[0m {v2}{_SEP}"
+        f"\x1b[2;33m5m:\x1b[0m {v5}{_SEP}"
+        f"\x1b[2;34m1D:\x1b[0m {v1d}{_SEP}"
         f"\x1b[2;36mF:\x1b[0m {_format_float(scan.float_shares)}"
     )
 

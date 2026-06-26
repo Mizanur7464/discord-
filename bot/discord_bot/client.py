@@ -756,8 +756,8 @@ class NewsTradingBot(commands.Bot):
         cooldown = self.settings.trading.mosquito_alert_cooldown_seconds
         if now - self._mosquito_recent.get(scan.symbol, 0) < cooldown:
             return
-        content, embed = build_mosquito_alert(scan, bot_name=self.settings.bot.name)
-        await self._mosquito_channel.send(content=content, embed=embed)
+        content, _ = build_mosquito_alert(scan, bot_name=self.settings.bot.name)
+        await self._mosquito_channel.send(content=content)
         self._mosquito_recent[scan.symbol] = now
         self._mosquito_automute.record_send()
 
