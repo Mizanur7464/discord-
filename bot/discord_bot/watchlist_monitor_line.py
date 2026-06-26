@@ -41,6 +41,29 @@ def _arrow(pct: float | None) -> str:
     return "↑" if pct > 0 else "↓"
 
 
+_SEC_TOKENS = (
+    "sec filing",
+    "8-k",
+    "10-k",
+    "10-q",
+    "form 4",
+    "form 8",
+    "s-1",
+    "filed with the sec",
+    "sec form",
+    "13d",
+    "13g",
+)
+
+
+def _is_sec_filing(scan: ScanResult) -> bool:
+    text = (scan.catalyst_label or "").lower()
+    if scan.catalyst:
+        text += " " + scan.catalyst.headline.lower()
+        text += " " + " ".join(scan.catalyst.keywords).lower()
+    return any(token in text for token in _SEC_TOKENS)
+
+
 def _status_tags(scan: ScanResult) -> list[str]:
     tags: list[str] = []
     if scan.mosquito_nhod or (scan.structure and scan.structure.hod_break):
@@ -67,10 +90,11 @@ def build_watchlist_monitor_line(
     country_flag: str = "🇺🇸",
     news_url: str = "",
 ) -> str:
-    """Compact NB / nuntio-std monitoring list row."""
+    """NB / nuntio-std row: NB arrangement, with our Score appended at the back."""
     clock = format_monitor_clock()
     rank = scan.liquidity_rank or scan.peak_rvol_rank
 
+    # Header — NB order: time ↑ TICKER price % · rank [tags] ~ flag
     head_parts = [clock, _arrow(scan.session_change_pct), f"**{scan.symbol}**", _price_level_tag(scan.price)]
     if scan.session_change_pct is not None:
         head_parts.append(f"{abs(scan.session_change_pct):.0f}%")
@@ -81,6 +105,7 @@ def build_watchlist_monitor_line(
     head_parts.append(f"~ {country_flag}")
     head = " ".join(part for part in head_parts if part)
 
+    # Details — NB order: Float | RVol | Vol | SEC, then our Score at the back.
     fields: list[str] = []
     if scan.float_shares:
         fields.append(f"**Float:** {_fmt_millions(scan.float_shares)}")
@@ -90,15 +115,11 @@ def build_watchlist_monitor_line(
         fields.append(f"**RVol:** {rvol_text}")
     if scan.daily_volume:
         fields.append(f"**Vol:** {_fmt_millions(float(scan.daily_volume))}")
-    if scan.microstructure and scan.microstructure.short_interest_pct is not None:
-        fields.append(f"**SI:** {scan.microstructure.short_interest_pct:.1f}%")
-    if scan.structure and scan.structure.distance_from_hod_pct is not None:
-        fields.append(f"{scan.structure.distance_from_hod_pct:+.1f}% from **HOD**")
-    if scan.catalyst_label and scan.catalyst_label != "No Clear Catalyst":
-        fields.append(f"**Theme:** [{scan.catalyst_label}]")
+    if _is_sec_filing(scan):
+        fields.append("`SEC`")
     fields.append(f"**Score:** {scan.grade} {scan.score}/100")
 
-    line = f"{head} | " + " | ".join(fields)
+    line = f"{head} |\n" + " | ".join(fields)
     if news_url:
         line = f"{line} - [Link]({news_url})"
     return line
