@@ -17,7 +17,7 @@ def _make_poller(tmp_path, monkeypatch, batches):
     monkeypatch.setattr(feed_mod, "STATE_FILE", tmp_path / "state.json")
     calls = {"n": 0}
 
-    def fake_fetch(api_key, *, page_size=25, provider="massive", page=0, published_gte=""):
+    def fake_fetch(api_key, *, page_size=25, provider="massive", page=0, published_gte="", sort="published.desc"):
         calls["n"] += 1
         return list(batches.pop(0)) if batches else []
 

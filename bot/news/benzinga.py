@@ -102,6 +102,7 @@ def _fetch_news_payload(
     provider: str = "massive",
     page: int = 0,
     published_gte: str = "",
+    sort: str = "published.desc",
 ) -> list[dict]:
     if provider == "direct":
         # Direct Benzinga: pageSize max 100, paginate with `page` offset.
@@ -118,7 +119,7 @@ def _fetch_news_payload(
         params: dict[str, str | int] = {
             "apiKey": api_key,
             "limit": page_size,
-            "sort": "published.desc",
+            "sort": sort or "published.desc",
         }
         if symbols:
             params["tickers"] = symbols.upper()
@@ -141,6 +142,7 @@ def fetch_recent_news(
     provider: str = "massive",
     page: int = 0,
     published_gte: str = "",
+    sort: str = "published.desc",
 ) -> list[BenzingaArticle]:
     if not api_key:
         return []
@@ -151,6 +153,7 @@ def fetch_recent_news(
             provider=provider,
             page=page,
             published_gte=published_gte,
+            sort=sort,
         )
         articles = [parse_benzinga_article(item) for item in items]
         return [article for article in articles if article]

@@ -31,7 +31,7 @@ from bot.utils.timing import log_trade_speed, mark_news_if_absent, mark_step
 
 from bot.discord_bot.mosquito_automute import ChannelAutoMute, MosquitoAutoMute
 from bot.discord_bot.mosquito_embed import build_mosquito_alert
-from bot.discord_bot.news_embed import build_benzinga_news_blocks
+from bot.discord_bot.news_embed import build_ai_news_line, build_benzinga_news_blocks
 from bot.discord_bot.scan_embed import build_scan_embed, format_scan_summary, _resolve_min_score
 from bot.discord_bot.watchlist_monitor_line import ScanDetailView, build_watchlist_monitor_line
 from bot.discord_bot.summary_publisher import SummaryPublisher
@@ -366,11 +366,11 @@ class NewsTradingBot(commands.Bot):
 
         return list(await asyncio.gather(*[_row(symbol) for symbol in symbols]))
 
-    async def _post_benzinga_news(self, article) -> None:
+    async def _post_benzinga_news(self, article) -> list:
         from bot.news.benzinga import BenzingaArticle
 
         if not isinstance(article, BenzingaArticle) or not self._news_channel:
-            return
+            return []
         if self.news_reader_store:
             await asyncio.to_thread(self.news_reader_store.save, article)
         symbols = article.symbols or [""]
@@ -384,12 +384,35 @@ class NewsTradingBot(commands.Bot):
             symbol_rows=symbol_rows,
             reader_base_url=self._reader_base_url(),
         )
+        sent: list = []
         for block in blocks:
-            await self._news_channel.send(block, suppress_embeds=True)
+            try:
+                msg = await self._news_channel.send(block, suppress_embeds=True)
+                sent.append((msg, block))
+            except Exception as exc:
+                logger.warning("Benzinga news send failed: %s", exc)
         for symbol in article.symbols:
             await self._maybe_send_potential_hit(symbol, article)
+        return sent
 
-    async def _process_benzinga_article_ai(self, article) -> None:
+    async def _append_ai_line_to_news(self, posted: list, item) -> None:
+        """Edit each posted news message to append the traffic-light AI line."""
+        if not posted or item is None:
+            return
+        ai_line = build_ai_news_line(
+            sentiment=getattr(item, "sentiment", ""),
+            reason=getattr(item, "ai_reason", ""),
+            category=getattr(item, "news_category", ""),
+        )
+        if not ai_line:
+            return
+        for msg, original in posted:
+            try:
+                await msg.edit(content=f"{original}\n{ai_line}", suppress=True)
+            except Exception as exc:
+                logger.debug("AI line edit failed: %s", exc)
+
+    async def _process_benzinga_article_ai(self, article, posted: list | None = None) -> None:
         from bot.news.benzinga import BenzingaArticle
 
         if not isinstance(article, BenzingaArticle):
@@ -405,6 +428,8 @@ class NewsTradingBot(commands.Bot):
             headline=article.title,
             timing_key=f"bz:{article.article_id}",
         )
+        # Append the AI traffic-light summary line to the posted news message(s).
+        await self._append_ai_line_to_news(posted or [], item)
         if not item:
             return
         if symbol:
@@ -415,8 +440,8 @@ class NewsTradingBot(commands.Bot):
 
     async def _ingest_benzinga_article(self, article) -> None:
         try:
-            await self._post_benzinga_news(article)
-            await self._process_benzinga_article_ai(article)
+            posted = await self._post_benzinga_news(article)
+            await self._process_benzinga_article_ai(article, posted=posted)
         except Exception as exc:
             logger.warning("Benzinga ingest failed: %s", exc)
 

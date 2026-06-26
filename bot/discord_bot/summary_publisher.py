@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 
 import discord
 
-from bot.discord_bot.summary_embed import build_live_summary_message
+from bot.discord_bot.summary_embed import _top_gainers, build_live_summary_message
 from bot.trading.scanner import ScanResult
 
 logger = logging.getLogger(__name__)
@@ -20,6 +20,9 @@ class SummaryPublisher:
         self.min_symbols = min_symbols
         self.top_limit = top_limit
         self._latest_scans: list[ScanResult] = []
+        # Last scans that actually contained positive movers — kept so the
+        # board shows the previous movers when the market is quiet.
+        self._last_mover_scans: list[ScanResult] = []
         self._data_updated_at: datetime | None = None
         self._message: discord.Message | None = None
 
@@ -29,17 +32,27 @@ class SummaryPublisher:
     def update_scans(self, scans: list[ScanResult]) -> None:
         self._latest_scans = list(scans)
         self._data_updated_at = datetime.now(_ET)
+        if _top_gainers(scans, limit=self.top_limit):
+            self._last_mover_scans = list(scans)
+
+    def _effective_scans(self) -> list[ScanResult]:
+        """Show current movers, or fall back to the last known movers."""
+        if _top_gainers(self._latest_scans, limit=self.top_limit):
+            return self._latest_scans
+        if self._last_mover_scans:
+            return self._last_mover_scans
+        return self._latest_scans
 
     def _build_content(self, *, now: datetime | None = None) -> str:
         return build_live_summary_message(
-            self._latest_scans,
+            self._effective_scans(),
             top_limit=self.top_limit,
             updated_at=now or datetime.now(_ET),
             data_updated_at=self._data_updated_at,
         )
 
     async def publish(self, channel: discord.TextChannel, *, refresh_data: bool = True) -> bool:
-        if not self._latest_scans:
+        if not self._latest_scans and not self._last_mover_scans:
             return False
         content = self._build_content()
         if self._message:
@@ -56,7 +69,7 @@ class SummaryPublisher:
         return True
 
     async def tick_footer(self, channel: discord.TextChannel) -> bool:
-        if not self._message or not self._latest_scans:
+        if not self._message or (not self._latest_scans and not self._last_mover_scans):
             return False
         content = self._build_content()
         try:

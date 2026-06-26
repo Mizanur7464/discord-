@@ -1,9 +1,20 @@
 from bot.news.benzinga import BenzingaArticle, parse_benzinga_article
 from bot.discord_bot.news_embed import (
+    build_ai_news_line,
     build_benzinga_news_blocks,
     build_benzinga_news_line,
     build_benzinga_news_post,
 )
+
+
+def test_build_ai_news_line_traffic_light():
+    assert build_ai_news_line(sentiment="bullish", reason="strong beat", category="Earnings") == (
+        "🟢 AI: Earnings — strong beat"
+    )
+    assert build_ai_news_line(sentiment="neutral", reason="minor update", category="").startswith("🟡 AI:")
+    assert build_ai_news_line(sentiment="ignored", reason="no catalyst", category="No Clear Catalyst").startswith(
+        "🔴 AI:"
+    )
 
 
 def test_benzinga_news_line_nuntio_style():

@@ -100,6 +100,34 @@ def build_benzinga_news_line(
     return row[:2000]
 
 
+_SENTIMENT_EMOJI = {
+    "bullish": "🟢",
+    "neutral": "🟡",
+    "ignored": "🔴",
+    "bearish": "🔴",
+}
+
+
+def build_ai_news_line(
+    *,
+    sentiment: str = "",
+    reason: str = "",
+    category: str = "",
+) -> str:
+    """Traffic-light AI summary line, e.g. `🟢 AI: Earnings — strong beat`."""
+    emoji = _SENTIMENT_EMOJI.get((sentiment or "").lower(), "🟡")
+    reason = _decode_text(reason)
+    category = _decode_text(category)
+    generic = {"", "no clear catalyst", "ai", "none"}
+    if category.lower() not in generic and reason:
+        summary = f"{category} — {reason}"
+    elif category.lower() not in generic:
+        summary = category
+    else:
+        summary = reason or "no clear catalyst"
+    return f"{emoji} AI: {summary}"[:300]
+
+
 def build_benzinga_news_post(
     article: BenzingaArticle,
     *,

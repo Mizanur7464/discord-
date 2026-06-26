@@ -29,13 +29,14 @@ class BenzingaFeedPoller:
         *,
         api_key: str,
         provider: str = "massive",
-        page_size: int = 1000,
+        page_size: int = 150,
         max_seen: int = 5000,
         max_direct_pages: int = 10,
     ):
         self.api_key = api_key
         self.provider = provider
-        # Massive allows huge limits; direct Benzinga caps pageSize at 100.
+        # Keep the payload light & fast: delta filtering means each poll only
+        # needs a small window of articles, so a modest limit avoids timeouts.
         self.page_size = page_size if provider != "direct" else min(page_size, 100)
         self.max_seen = max_seen
         self.max_direct_pages = max_direct_pages
@@ -119,19 +120,28 @@ class BenzingaFeedPoller:
         return fresh
 
     def _poll_massive(self) -> list[BenzingaArticle]:
-        # Delta fetch: everything published since the last article we saw.
-        # A small overlap (inclusive gte) is fine — seen_ids dedupes it.
-        published_gte = ""
         last = _parse_iso(self._last_published)
-        if last:
-            published_gte = (last - timedelta(seconds=2)).astimezone(timezone.utc).strftime(
-                "%Y-%m-%dT%H:%M:%SZ"
+        if not last:
+            # Bootstrap: grab the most recent window (newest-first) to establish
+            # a baseline. On a real cold start these are primed silently.
+            return fetch_recent_news(
+                self.api_key,
+                page_size=self.page_size,
+                provider=self.provider,
+                sort="published.desc",
             )
+        # Delta fetch: everything published since the last article we saw,
+        # oldest-first so a burst larger than page_size is caught up across
+        # subsequent ticks with no gaps. Small overlap is deduped by seen_ids.
+        published_gte = (last - timedelta(seconds=2)).astimezone(timezone.utc).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        )
         return fetch_recent_news(
             self.api_key,
             page_size=self.page_size,
             provider=self.provider,
             published_gte=published_gte,
+            sort="published.asc",
         )
 
     def _poll_direct(self) -> list[BenzingaArticle]:
