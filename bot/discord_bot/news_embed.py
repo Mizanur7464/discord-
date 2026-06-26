@@ -118,6 +118,8 @@ def build_ai_news_line(
     emoji = _SENTIMENT_EMOJI.get((sentiment or "").lower(), "🟡")
     reason = _decode_text(reason)
     category = _decode_text(category)
+    # Drop a redundant leading "AI:" / "AI -" that the model sometimes adds.
+    reason = re.sub(r"^\s*ai\s*[:\-–]\s*", "", reason, flags=re.IGNORECASE).strip()
     generic = {"", "no clear catalyst", "ai", "none"}
     if category.lower() not in generic and reason:
         summary = f"{category} — {reason}"

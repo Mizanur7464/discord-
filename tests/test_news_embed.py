@@ -15,6 +15,10 @@ def test_build_ai_news_line_traffic_light():
     assert build_ai_news_line(sentiment="ignored", reason="no catalyst", category="No Clear Catalyst").startswith(
         "🔴 AI:"
     )
+    # Strip a redundant leading "AI:" the model sometimes prepends.
+    assert build_ai_news_line(
+        sentiment="neutral", reason="AI: routine filings and unclear impact", category="Earnings"
+    ) == "🟡 AI: Earnings — routine filings and unclear impact"
 
 
 def test_benzinga_news_line_nuntio_style():
