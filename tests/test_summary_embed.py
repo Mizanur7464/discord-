@@ -63,6 +63,7 @@ def test_live_summary_message_nuntio_style():
     assert "| WYY" in message
     assert "68.7" in message
     assert "86.2 k" in message
+    assert "Float" in message
     assert "PR*" in message
     assert "*Updated: just now*" in message
     assert "News Types Key" in message

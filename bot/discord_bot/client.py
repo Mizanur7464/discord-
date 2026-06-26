@@ -37,7 +37,7 @@ from bot.discord_bot.news_embed import build_ai_news_line, build_benzinga_news_b
 # consecutive news posts, matching the SPM/NB look.
 _NEWS_GAP = "\n\u200b"
 from bot.discord_bot.scan_embed import build_scan_embed, format_scan_summary, _resolve_min_score
-from bot.discord_bot.watchlist_monitor_line import ScanDetailView, build_watchlist_monitor_line
+from bot.discord_bot.watchlist_monitor_line import build_watchlist_monitor_line
 from bot.discord_bot.summary_publisher import SummaryPublisher
 from bot.forwarder.client import SessionForwarder
 
@@ -126,6 +126,7 @@ class NewsTradingBot(commands.Bot):
                 api_key=settings.benzinga_api_key,
                 provider=settings.benzinga_news_provider,
                 brand_name=settings.bot.name,
+                scan_provider=self._scan_for_reader,
             )
         self.realtime_scanner: RealtimeScanner | None = None
         if settings.trading.realtime_scanner_enabled:
@@ -529,6 +530,35 @@ class NewsTradingBot(commands.Bot):
         )
         return universe.symbols
 
+    def _scan_for_reader(self, symbol: str):
+        """Sync scan lookup for the reader server's /scan/{symbol} page."""
+        symbol = symbol.upper()
+        cached = self._scan_detail_cache.get(symbol)
+        if cached:
+            return cached[0]
+        try:
+            return self.scanner.scan(symbol)
+        except Exception:
+            return None
+
+    def _scan_public_url(self, symbol: str) -> str:
+        base = self._reader_base_url()
+        if not base or not symbol:
+            return ""
+        return f"{base}/scan/{symbol.upper()}"
+
+    async def _pct_from_52w_low(self, scan: ScanResult) -> float | None:
+        if not scan.symbol or not self.settings.finnhub_api_key or not scan.price:
+            return None
+        from bot.trading.market_data import fetch_52week_low_sync
+
+        low = await asyncio.to_thread(
+            fetch_52week_low_sync, scan.symbol, self.settings.finnhub_api_key
+        )
+        if not low or low <= 0:
+            return None
+        return (scan.price / low - 1) * 100
+
     async def _send_scan_alert(
         self,
         scan: ScanResult,
@@ -564,7 +594,10 @@ class NewsTradingBot(commands.Bot):
             )
 
         _, news_url = self._related_news_for_symbol(scan.symbol)
-        content = build_watchlist_monitor_line(scan, country_flag=country_flag, news_url=news_url)
+        pct_low = await self._pct_from_52w_low(scan)
+        content = build_watchlist_monitor_line(
+            scan, country_flag=country_flag, news_url=news_url, pct_from_52w_low=pct_low
+        )
         await channel.send(content=f"{content}{_NEWS_GAP}", suppress_embeds=True)
 
         if on_watchlist_channel:
@@ -654,16 +687,16 @@ class NewsTradingBot(commands.Bot):
             _, country_flag = await asyncio.to_thread(
                 fetch_company_profile_sync, scan.symbol, self.settings.finnhub_api_key
             )
-        news_title, news_url = self._related_news_for_symbol(scan.symbol)
-        content = build_watchlist_monitor_line(scan, country_flag=country_flag, news_url=news_url)
-        view = ScanDetailView(
-            self,
-            scan.symbol,
-            title_prefix="Potential",
-            related_news_title=news_title,
-            related_news_url=news_url,
+        _, news_url = self._related_news_for_symbol(scan.symbol)
+        pct_low = await self._pct_from_52w_low(scan)
+        content = build_watchlist_monitor_line(
+            scan,
+            country_flag=country_flag,
+            news_url=news_url,
+            pct_from_52w_low=pct_low,
+            details_url=self._scan_public_url(scan.symbol),
         )
-        await self._potential_channel.send(content=f"{content}{_NEWS_GAP}", view=view, suppress_embeds=True)
+        await self._potential_channel.send(content=f"{content}{_NEWS_GAP}", suppress_embeds=True)
 
     async def _maybe_send_potential_hit(self, symbol: str, article) -> None:
         if not symbol or not self.potential_store.has_active(symbol):

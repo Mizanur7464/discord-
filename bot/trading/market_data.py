@@ -199,6 +199,58 @@ def fetch_float_shares_sync(
     return cache.get(equity_symbol)
 
 
+_LOW_CACHE_FILE = Path(__file__).resolve().parents[2] / "data" / "low52_cache.json"
+_low52_cache: dict[str, float] | None = None
+
+
+def _load_low52_cache() -> dict[str, float]:
+    global _low52_cache
+    if _low52_cache is None:
+        try:
+            raw = json.loads(_LOW_CACHE_FILE.read_text(encoding="utf-8"))
+            _low52_cache = {str(k): float(v) for k, v in raw.items() if v}
+        except Exception:
+            _low52_cache = {}
+    return _low52_cache
+
+
+def _save_low52_cache() -> None:
+    if _low52_cache is None:
+        return
+    try:
+        _LOW_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _LOW_CACHE_FILE.write_text(json.dumps(_low52_cache), encoding="utf-8")
+    except Exception as exc:
+        logger.debug("52w-low cache save failed: %s", exc)
+
+
+def fetch_52week_low_sync(symbol: str, finnhub_api_key: str) -> float | None:
+    """Return the 52-week low (Finnhub metric), cached to survive API hiccups."""
+    equity_symbol = _normalize_equity_symbol(symbol)
+    if not equity_symbol or not finnhub_api_key:
+        return None
+    cache = _load_low52_cache()
+    url = (
+        "https://finnhub.io/api/v1/stock/metric"
+        f"?symbol={quote(equity_symbol)}&metric=all&token={quote(finnhub_api_key)}"
+    )
+    try:
+        with urlopen(Request(url, headers={"User-Agent": "discord-news-bot/1.0"}), timeout=8) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+        metric = payload.get("metric") or {}
+        raw = metric.get("52WeekLow")
+        if raw is not None:
+            value = float(raw)
+            if value > 0:
+                if cache.get(equity_symbol) != value:
+                    cache[equity_symbol] = value
+                    _save_low52_cache()
+                return value
+    except Exception as exc:
+        logger.debug("Finnhub 52w-low fetch failed for %s: %s", equity_symbol, exc)
+    return cache.get(equity_symbol)
+
+
 def fetch_company_profile_sync(symbol: str, finnhub_api_key: str) -> tuple[str, str]:
     """Return (company_name, country_flag_emoji)."""
     if not finnhub_api_key:

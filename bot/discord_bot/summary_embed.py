@@ -45,6 +45,15 @@ def _fmt_volume(volume: int | None) -> str:
     return str(volume)
 
 
+def _fmt_float(shares: float | None) -> str:
+    if not shares or shares <= 0:
+        return "—"
+    millions = shares / 1_000_000
+    if millions >= 100:
+        return f"{millions:.0f} m"
+    return f"{millions:.1f} m"
+
+
 def _news_text(scan: ScanResult) -> str:
     parts = [scan.catalyst_label or ""]
     if scan.catalyst:
@@ -192,17 +201,18 @@ def build_live_summary_message(
                 _fmt_price(scan.price),
                 _fmt_pct(scan.session_change_pct),
                 _fmt_volume(scan.daily_volume),
+                _fmt_float(scan.float_shares),
                 _short_news_label(scan),
             ]
             for scan in gainers
         ]
-        table = _pipe_table(["Symbol", "Price", "% ↑", "Volume", "News"], rows)
+        table = _pipe_table(["Symbol", "Price", "% ↑", "Volume", "Float", "News"], rows)
         body = f"**{title}**\n```\n{table}\n```"
     elif scans:
         body = (
             f"**{title}**\n"
             "```\n"
-            "| Symbol | Price | % ↑ | Volume | News |\n"
+            "| Symbol | Price | % ↑ | Volume | Float | News |\n"
             "| No positive movers yet — scanner is running… |\n"
             "```"
         )

@@ -51,6 +51,20 @@ def test_watchlist_monitor_line_nb_arrangement_score_at_back():
     assert "Theme:" not in line
 
 
+def test_watchlist_monitor_line_boxes_important_values():
+    scan = _scan(symbol="HKIT", price=0.42, session_change_pct=48.0, score=60, grade="C")
+    line = build_watchlist_monitor_line(scan)
+    # Important values rendered in `code` boxes like NB.
+    assert "`< $.50c`" in line
+    assert "`48%`" in line
+
+
+def test_watchlist_monitor_line_52w_low():
+    scan = _scan(symbol="WYY", price=6.5, session_change_pct=12.0, score=70, grade="B")
+    line = build_watchlist_monitor_line(scan, pct_from_52w_low=31.2)
+    assert "`+31.2% from 52W-Low`" in line
+
+
 def test_watchlist_monitor_line_sec_tag():
     scan = _scan(
         symbol="ABCD",

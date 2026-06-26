@@ -89,15 +89,21 @@ def build_watchlist_monitor_line(
     *,
     country_flag: str = "🇺🇸",
     news_url: str = "",
+    pct_from_52w_low: float | None = None,
+    details_url: str = "",
 ) -> str:
     """NB / nuntio-std row: NB arrangement, with our Score appended at the back."""
     clock = format_monitor_clock()
     rank = scan.liquidity_rank or scan.peak_rvol_rank
 
-    # Header — NB order: time ↑ TICKER price % · rank [tags] ~ flag
-    head_parts = [clock, _arrow(scan.session_change_pct), f"**{scan.symbol}**", _price_level_tag(scan.price)]
+    # Header — NB order: time ↑ TICKER price % · rank [tags] ~ flag.
+    # Important values sit in small `code` boxes like NB.
+    head_parts = [f"`{clock}`", _arrow(scan.session_change_pct), f"**{scan.symbol}**"]
+    price_tag = _price_level_tag(scan.price)
+    if price_tag:
+        head_parts.append(f"`{price_tag}`")
     if scan.session_change_pct is not None:
-        head_parts.append(f"{abs(scan.session_change_pct):.0f}%")
+        head_parts.append(f"`{abs(scan.session_change_pct):.0f}%`")
     if rank:
         head_parts.append(f"· {rank}")
     for tag in _status_tags(scan):
@@ -115,6 +121,8 @@ def build_watchlist_monitor_line(
         fields.append(f"**RVol:** {rvol_text}")
     if scan.daily_volume:
         fields.append(f"**Vol:** {_fmt_millions(float(scan.daily_volume))}")
+    if pct_from_52w_low is not None:
+        fields.append(f"`+{pct_from_52w_low:.1f}% from 52W-Low`")
     if _is_sec_filing(scan):
         fields.append("`SEC`")
     fields.append(f"**Score:** {scan.grade} {scan.score}/100")
@@ -122,6 +130,8 @@ def build_watchlist_monitor_line(
     line = f"{head} |\n" + " | ".join(fields)
     if news_url:
         line = f"{line} - [Link]({news_url})"
+    if details_url:
+        line = f"{line} · [Details]({details_url})"
     return line
 
 

@@ -8,7 +8,7 @@ import logging
 from aiohttp import web
 
 from bot.news.benzinga import BenzingaArticle, fetch_article_by_id
-from bot.news.reader_html import render_article_page, render_not_found_page
+from bot.news.reader_html import render_article_page, render_not_found_page, render_scan_page
 from bot.utils.config import DEFAULT_BOT_NAME
 
 logger = logging.getLogger(__name__)
@@ -23,12 +23,15 @@ class NewsReaderServer:
         api_key: str = "",
         provider: str = "massive",
         brand_name: str = "",
+        scan_provider=None,
     ):
         self.store = store
         self.port = max(1024, int(port))
         self.api_key = api_key
         self.provider = provider
         self.brand_name = brand_name or DEFAULT_BOT_NAME
+        # Optional callable: symbol -> ScanResult | None (used for /scan pages).
+        self.scan_provider = scan_provider
         self._runner: web.AppRunner | None = None
         self._site: web.TCPSite | None = None
 
@@ -66,12 +69,34 @@ class NewsReaderServer:
             content_type="text/html",
         )
 
+    async def _handle_scan(self, request: web.Request) -> web.Response:
+        symbol = str(request.match_info.get("symbol") or "").strip().upper()
+        if not symbol:
+            return web.Response(text="Missing symbol", status=400)
+        scan = None
+        if self.scan_provider:
+            try:
+                scan = await asyncio.to_thread(self.scan_provider, symbol)
+            except Exception as exc:
+                logger.debug("Scan provider failed for %s: %s", symbol, exc)
+        if not scan:
+            return web.Response(
+                text=render_not_found_page(symbol, brand_name=self.brand_name),
+                content_type="text/html",
+                status=404,
+            )
+        return web.Response(
+            text=render_scan_page(scan, brand_name=self.brand_name),
+            content_type="text/html",
+        )
+
     async def start(self) -> None:
         if self._runner:
             return
         app = web.Application()
         app.router.add_get("/health", self._handle_health)
         app.router.add_get("/n/{article_id}", self._handle_article)
+        app.router.add_get("/scan/{symbol}", self._handle_scan)
         self._runner = web.AppRunner(app)
         await self._runner.setup()
         self._site = web.TCPSite(self._runner, host="0.0.0.0", port=self.port)
