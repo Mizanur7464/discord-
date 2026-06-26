@@ -370,11 +370,11 @@ class NewsTradingBot(commands.Bot):
 
         return list(await asyncio.gather(*[_row(symbol) for symbol in symbols]))
 
-    async def _post_benzinga_news(self, article) -> list:
+    async def _post_benzinga_news(self, article, *, ai_line: str = "") -> None:
         from bot.news.benzinga import BenzingaArticle
 
         if not isinstance(article, BenzingaArticle) or not self._news_channel:
-            return []
+            return
         if self.news_reader_store:
             await asyncio.to_thread(self.news_reader_store.save, article)
         symbols = article.symbols or [""]
@@ -388,42 +388,20 @@ class NewsTradingBot(commands.Bot):
             symbol_rows=symbol_rows,
             reader_base_url=self._reader_base_url(),
         )
-        sent: list = []
         for block in blocks:
+            # Post news + AI line together in one message so Discord never
+            # shows an "(edited)" tag.
+            content = f"{block}\n{ai_line}{_NEWS_GAP}" if ai_line else f"{block}{_NEWS_GAP}"
             try:
-                msg = await self._news_channel.send(f"{block}{_NEWS_GAP}", suppress_embeds=True)
-                sent.append((msg, block))
+                await self._news_channel.send(content, suppress_embeds=True)
             except Exception as exc:
                 logger.warning("Benzinga news send failed: %s", exc)
         for symbol in article.symbols:
             await self._maybe_send_potential_hit(symbol, article)
-        return sent
 
-    async def _append_ai_line_to_news(self, posted: list, item) -> None:
-        """Edit each posted news message to append the traffic-light AI line."""
-        if not posted or item is None:
-            return
-        ai_line = build_ai_news_line(
-            sentiment=getattr(item, "sentiment", ""),
-            reason=getattr(item, "ai_reason", ""),
-            category=getattr(item, "news_category", ""),
-        )
-        if not ai_line:
-            return
-        for msg, original in posted:
-            try:
-                await msg.edit(content=f"{original}\n{ai_line}{_NEWS_GAP}", suppress=True)
-            except Exception as exc:
-                logger.debug("AI line edit failed: %s", exc)
-
-    async def _process_benzinga_article_ai(self, article, posted: list | None = None) -> None:
-        from bot.news.benzinga import BenzingaArticle
-
-        if not isinstance(article, BenzingaArticle):
-            return
-        symbol = article.symbols[0] if article.symbols else ""
+    async def _analyze_benzinga_article(self, article):
         text = article.title if not article.body else f"{article.title}\n{article.body[:4000]}"
-        item = await self.analyzer.analyze_text_async(
+        return await self.analyzer.analyze_text_async(
             text,
             source="Benzinga",
             published=article.published or "Benzinga",
@@ -432,10 +410,11 @@ class NewsTradingBot(commands.Bot):
             headline=article.title,
             timing_key=f"bz:{article.article_id}",
         )
-        # Append the AI traffic-light summary line to the posted news message(s).
-        await self._append_ai_line_to_news(posted or [], item)
-        if not item:
+
+    async def _finalize_benzinga_ai(self, article, item) -> None:
+        if item is None:
             return
+        symbol = article.symbols[0] if article.symbols else ""
         if symbol:
             item.stock_symbol = symbol
         trade_msg = await self._process_item(item, timing_key=f"bz:{article.article_id}")
@@ -443,9 +422,22 @@ class NewsTradingBot(commands.Bot):
         logger.info("Benzinga article processed: %s", article.title[:80])
 
     async def _ingest_benzinga_article(self, article) -> None:
+        from bot.news.benzinga import BenzingaArticle
+
+        if not isinstance(article, BenzingaArticle):
+            return
         try:
-            posted = await self._post_benzinga_news(article)
-            await self._process_benzinga_article_ai(article, posted=posted)
+            # Analyze first, then post news + AI line in a single message.
+            item = await self._analyze_benzinga_article(article)
+            ai_line = ""
+            if item is not None:
+                ai_line = build_ai_news_line(
+                    sentiment=getattr(item, "sentiment", ""),
+                    reason=getattr(item, "ai_reason", ""),
+                    category=getattr(item, "news_category", ""),
+                )
+            await self._post_benzinga_news(article, ai_line=ai_line)
+            await self._finalize_benzinga_ai(article, item)
         except Exception as exc:
             logger.warning("Benzinga ingest failed: %s", exc)
 
