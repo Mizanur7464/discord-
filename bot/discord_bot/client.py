@@ -32,6 +32,10 @@ from bot.utils.timing import log_trade_speed, mark_news_if_absent, mark_step
 from bot.discord_bot.mosquito_automute import ChannelAutoMute, MosquitoAutoMute
 from bot.discord_bot.mosquito_embed import build_mosquito_alert
 from bot.discord_bot.news_embed import build_ai_news_line, build_benzinga_news_blocks
+
+# Trailing blank line (zero-width space) to add visual spacing between
+# consecutive news posts, matching the SPM/NB look.
+_NEWS_GAP = "\n\u200b"
 from bot.discord_bot.scan_embed import build_scan_embed, format_scan_summary, _resolve_min_score
 from bot.discord_bot.watchlist_monitor_line import ScanDetailView, build_watchlist_monitor_line
 from bot.discord_bot.summary_publisher import SummaryPublisher
@@ -387,7 +391,7 @@ class NewsTradingBot(commands.Bot):
         sent: list = []
         for block in blocks:
             try:
-                msg = await self._news_channel.send(block, suppress_embeds=True)
+                msg = await self._news_channel.send(f"{block}{_NEWS_GAP}", suppress_embeds=True)
                 sent.append((msg, block))
             except Exception as exc:
                 logger.warning("Benzinga news send failed: %s", exc)
@@ -408,7 +412,7 @@ class NewsTradingBot(commands.Bot):
             return
         for msg, original in posted:
             try:
-                await msg.edit(content=f"{original}\n{ai_line}", suppress=True)
+                await msg.edit(content=f"{original}\n{ai_line}{_NEWS_GAP}", suppress=True)
             except Exception as exc:
                 logger.debug("AI line edit failed: %s", exc)
 
