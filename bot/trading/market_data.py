@@ -4,12 +4,39 @@ from __future__ import annotations
 
 import json
 import logging
+from pathlib import Path
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
 from bot.trading.indicators import Bar
 
 logger = logging.getLogger(__name__)
+
+# Disk-backed cache of float shares so a transient API failure never blanks
+# the "F:" field — floats change rarely, so a remembered value stays valid.
+_FLOAT_CACHE_FILE = Path(__file__).resolve().parents[2] / "data" / "float_cache.json"
+_float_cache: dict[str, float] | None = None
+
+
+def _load_float_cache() -> dict[str, float]:
+    global _float_cache
+    if _float_cache is None:
+        try:
+            raw = json.loads(_FLOAT_CACHE_FILE.read_text(encoding="utf-8"))
+            _float_cache = {str(k): float(v) for k, v in raw.items() if v}
+        except Exception:
+            _float_cache = {}
+    return _float_cache
+
+
+def _save_float_cache() -> None:
+    if _float_cache is None:
+        return
+    try:
+        _FLOAT_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _FLOAT_CACHE_FILE.write_text(json.dumps(_float_cache), encoding="utf-8")
+    except Exception as exc:
+        logger.debug("Float cache save failed: %s", exc)
 
 
 def _series(data_client, symbol: str, timeframe, limit: int):
@@ -121,15 +148,29 @@ def fetch_float_shares_sync(
     *,
     massive_api_key: str = "",
 ) -> float | None:
-    """Return share count for float display (Massive → Finnhub metric → profile)."""
+    """Return share count for float display (Massive → Finnhub metric → profile).
+
+    Falls back to a remembered value when every live source fails, so a
+    transient timeout never blanks the float.
+    """
     equity_symbol = _normalize_equity_symbol(symbol)
     if not equity_symbol:
+        return None
+
+    cache = _load_float_cache()
+
+    def _remember(value: float | None) -> float | None:
+        if value and value > 0:
+            if cache.get(equity_symbol) != value:
+                cache[equity_symbol] = value
+                _save_float_cache()
+            return value
         return None
 
     if massive_api_key:
         shares = _shares_from_massive(equity_symbol, massive_api_key)
         if shares:
-            return shares
+            return _remember(shares)
 
     if finnhub_api_key:
         url = (
@@ -146,15 +187,16 @@ def fetch_float_shares_sync(
                 if 0 < value < 10_000:
                     value *= 1_000_000
                 if value > 0:
-                    return value
+                    return _remember(value)
         except Exception as exc:
             logger.debug("Finnhub metric float fetch failed for %s: %s", equity_symbol, exc)
 
         shares = _shares_from_finnhub_profile(equity_symbol, finnhub_api_key)
         if shares:
-            return shares
+            return _remember(shares)
 
-    return None
+    # All live sources failed — use the last known value if we have one.
+    return cache.get(equity_symbol)
 
 
 def fetch_company_profile_sync(symbol: str, finnhub_api_key: str) -> tuple[str, str]:
