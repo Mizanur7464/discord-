@@ -143,7 +143,7 @@ trading:
   ibkr_host: 127.0.0.1
   ibkr_port: 7497
   ibkr_client_id: 1
-  universe_scanner_enabled: true
+  universe_scanner_enabled: false       # watchlist-driven: Scanner + Gainer ranking only track good-news watchlist stocks
   universe_most_actives_top: 100
   universe_movers_top: 50
   realtime_max_symbols_per_cycle: 100
