@@ -1390,8 +1390,30 @@ class NewsTradingBot(commands.Bot):
             items.append(item)
         return items
 
+    @staticmethod
+    def _is_trade_action(trade_msg: str | None) -> bool:
+        """True only for real trade/exit actions (buyer: alert channel must not
+        duplicate the news + AI line that already shows in #news)."""
+        if not trade_msg:
+            return False
+        low = trade_msg.lower()
+        skip_tokens = (
+            "no trade",
+            "watchlist",
+            "waiting for",
+            "scanner score",
+            "below threshold",
+            "manual confirm",
+        )
+        return not any(token in low for token in skip_tokens)
+
     async def send_news_alert(self, item: NewsItem, trade_msg: str | None = None) -> None:
         if not self._alert_channel:
+            return
+
+        # Alert channel is reserved for actual trade/exit actions; plain news
+        # analysis is already posted (with AI line) in the news channel.
+        if not self._is_trade_action(trade_msg):
             return
 
         category_colors = {
