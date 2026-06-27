@@ -93,3 +93,19 @@ def test_relative_updated_minutes():
     now = datetime(2026, 6, 25, 9, 0, tzinfo=_ET)
     earlier = datetime(2026, 6, 25, 8, 58, tzinfo=_ET)
     assert _relative_updated(earlier, now) == "2 minutes ago"
+
+
+def test_watchlist_symbol_marked_on_market_gainers():
+    now = datetime(2026, 6, 25, 10, 0, tzinfo=_ET)
+    scans = [_scan("MRNA", 12.5), _scan("ZZZ", 8.0)]
+    message = build_live_summary_message(
+        scans,
+        top_limit=15,
+        updated_at=now,
+        data_updated_at=now,
+        watchlist_symbols={"MRNA"},
+        preserve_order=True,
+    )
+    assert "★ MRNA" in message
+    assert "| ZZZ" in message
+    assert "★ = on our watchlist" in message

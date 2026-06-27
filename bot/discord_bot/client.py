@@ -25,7 +25,7 @@ from bot.trading.potential_store import PotentialStore
 from bot.trading.realtime_scanner import RealtimeScanner
 from bot.trading.runner_history import RunnerHistoryStore
 from bot.trading.scanner import ScanResult, SymbolScanner
-from bot.trading.universe_scanner import fetch_universe_symbols
+from bot.trading.universe_scanner import fetch_market_top_gainers, fetch_universe_symbols
 from bot.utils.config import Settings
 from bot.utils.timing import log_trade_speed, mark_news_if_absent, mark_step
 
@@ -142,7 +142,6 @@ class NewsTradingBot(commands.Bot):
                 else None,
                 max_symbols_per_cycle=settings.trading.realtime_max_symbols_per_cycle,
                 batch_rotation=settings.trading.realtime_batch_rotation,
-                summary_update_fn=self.summary_publisher.update_scans,
                 batch_hook_fn=self._on_scan_batch,
             )
         self._monitoring = False
@@ -449,7 +448,8 @@ class NewsTradingBot(commands.Bot):
         while True:
             try:
                 if self._summary_channel:
-                    if elapsed >= interval:
+                    if elapsed >= interval or not self.summary_publisher.has_data():
+                        await self._refresh_summary_gainers()
                         await self.summary_publisher.publish(self._summary_channel)
                         elapsed = 0
                     else:
@@ -458,6 +458,32 @@ class NewsTradingBot(commands.Bot):
                 logger.warning("Summary publish failed: %s", exc)
             await asyncio.sleep(tick)
             elapsed += tick
+
+    async def _refresh_summary_gainers(self) -> None:
+        """Summary board: live market top gainers; watchlist symbols get ★ mark."""
+        limit = self.settings.trading.summary_top_gainers_limit
+        gainers = await asyncio.to_thread(
+            fetch_market_top_gainers,
+            self.settings.alpaca_api_key,
+            self.settings.alpaca_secret_key,
+            top=limit,
+        )
+        if not gainers:
+            return
+
+        scans: list[ScanResult] = []
+        for candidate in gainers:
+            scan = await asyncio.to_thread(self._scan_symbol_sync, candidate.symbol)
+            if candidate.change_pct is not None:
+                scan.session_change_pct = candidate.change_pct
+            scans.append(scan)
+
+        watchlist_symbols = {entry.symbol.upper() for entry in self.watchlist.active_entries()}
+        self.summary_publisher.update_scans(
+            scans,
+            watchlist_symbols=watchlist_symbols,
+            market_ordered=True,
+        )
 
     async def _exit_monitor_loop(self) -> None:
         cfg = self.settings.trading

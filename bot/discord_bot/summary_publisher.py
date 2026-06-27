@@ -23,21 +23,34 @@ class SummaryPublisher:
         # Last scans that actually contained positive movers — kept so the
         # board shows the previous movers when the market is quiet.
         self._last_mover_scans: list[ScanResult] = []
+        self._watchlist_symbols: set[str] = set()
+        self._market_ordered = False
         self._data_updated_at: datetime | None = None
         self._message: discord.Message | None = None
+
+    def has_data(self) -> bool:
+        return bool(self._latest_scans or self._last_mover_scans)
 
     def reset_message(self) -> None:
         self._message = None
 
-    def update_scans(self, scans: list[ScanResult]) -> None:
+    def update_scans(
+        self,
+        scans: list[ScanResult],
+        *,
+        watchlist_symbols: set[str] | None = None,
+        market_ordered: bool = False,
+    ) -> None:
         self._latest_scans = list(scans)
+        self._watchlist_symbols = {s.upper() for s in (watchlist_symbols or set())}
+        self._market_ordered = market_ordered
         self._data_updated_at = datetime.now(_ET)
-        if _top_gainers(scans, limit=self.top_limit):
+        if _top_gainers(scans, limit=self.top_limit, preserve_order=market_ordered):
             self._last_mover_scans = list(scans)
 
     def _effective_scans(self) -> list[ScanResult]:
         """Show current movers, or fall back to the last known movers."""
-        if _top_gainers(self._latest_scans, limit=self.top_limit):
+        if _top_gainers(self._latest_scans, limit=self.top_limit, preserve_order=self._market_ordered):
             return self._latest_scans
         if self._last_mover_scans:
             return self._last_mover_scans
@@ -49,6 +62,8 @@ class SummaryPublisher:
             top_limit=self.top_limit,
             updated_at=now or datetime.now(_ET),
             data_updated_at=self._data_updated_at,
+            watchlist_symbols=self._watchlist_symbols,
+            preserve_order=self._market_ordered,
         )
 
     async def publish(self, channel: discord.TextChannel, *, refresh_data: bool = True) -> bool:

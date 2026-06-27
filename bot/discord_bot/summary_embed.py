@@ -156,7 +156,15 @@ def _relative_updated(data_updated_at: datetime | None, now: datetime) -> str:
     return f"{hours} hours ago"
 
 
-def _top_gainers(scans: list[ScanResult], *, limit: int = 15) -> list[ScanResult]:
+def _top_gainers(
+    scans: list[ScanResult],
+    *,
+    limit: int = 15,
+    preserve_order: bool = False,
+) -> list[ScanResult]:
+    if preserve_order:
+        movers = [scan for scan in scans if (scan.session_change_pct or 0) > 0]
+        return movers[:limit]
     ranked = sorted(
         scans,
         key=lambda scan: (
@@ -168,6 +176,13 @@ def _top_gainers(scans: list[ScanResult], *, limit: int = 15) -> list[ScanResult
     )
     movers = [scan for scan in ranked if (scan.session_change_pct or 0) > 0]
     return movers[:limit]
+
+
+def _fmt_symbol(symbol: str, watchlist_symbols: set[str]) -> str:
+    sym = symbol.upper()
+    if sym in watchlist_symbols:
+        return f"★ {sym}"
+    return sym
 
 
 def _pipe_table(headers: list[str], rows: list[list[str]]) -> str:
@@ -189,15 +204,18 @@ def build_live_summary_message(
     top_limit: int = 15,
     updated_at: datetime | None = None,
     data_updated_at: datetime | None = None,
+    watchlist_symbols: set[str] | None = None,
+    preserve_order: bool = False,
 ) -> str:
     now = updated_at or datetime.now(_ET)
-    gainers = _top_gainers(scans, limit=top_limit)
+    wl = {s.upper() for s in (watchlist_symbols or set())}
+    gainers = _top_gainers(scans, limit=top_limit, preserve_order=preserve_order)
     title = _session_title(now)
 
     if gainers:
         rows = [
             [
-                scan.symbol,
+                _fmt_symbol(scan.symbol, wl),
                 _fmt_price(scan.price),
                 _fmt_pct(scan.session_change_pct),
                 _fmt_volume(scan.daily_volume),
@@ -207,7 +225,8 @@ def build_live_summary_message(
             for scan in gainers
         ]
         table = _pipe_table(["Symbol", "Price", "% ↑", "Volume", "Float", "News"], rows)
-        body = f"**{title}**\n```\n{table}\n```"
+        watchlist_note = "\n★ = on our watchlist" if wl and any(s in wl for s in (g.symbol.upper() for g in gainers)) else ""
+        body = f"**{title}**\n```\n{table}\n```{watchlist_note}"
     elif scans:
         body = (
             f"**{title}**\n"

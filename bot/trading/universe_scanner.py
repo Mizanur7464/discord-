@@ -92,3 +92,43 @@ def fetch_universe_symbols(
 
     logger.info("Universe scan found %s symbols", result.count)
     return result
+
+
+def fetch_market_top_gainers(
+    api_key: str,
+    secret_key: str,
+    *,
+    top: int = 15,
+) -> list[UniverseCandidate]:
+    """Live market top gainers (Alpaca screener — Moomoo-style movers list)."""
+    if not api_key or not secret_key:
+        return []
+
+    from alpaca.data.enums import MarketType
+    from alpaca.data.historical.screener import ScreenerClient
+    from alpaca.data.requests import MarketMoversRequest
+
+    client = ScreenerClient(api_key, secret_key)
+    gainers: list[UniverseCandidate] = []
+    try:
+        movers = client.get_market_movers(
+            MarketMoversRequest(top=max(1, top), market_type=MarketType.STOCKS)
+        )
+        for idx, item in enumerate(getattr(movers, "gainers", []) or []):
+            sym = getattr(item, "symbol", None) or (item.get("symbol") if isinstance(item, dict) else None)
+            pct = getattr(item, "percent_change", None) or (
+                item.get("percent_change") if isinstance(item, dict) else None
+            )
+            if sym:
+                gainers.append(
+                    UniverseCandidate(
+                        symbol=str(sym).upper(),
+                        source="gainer",
+                        rank=idx + 1,
+                        change_pct=float(pct) if pct is not None else None,
+                    )
+                )
+    except Exception as exc:
+        logger.warning("Market top gainers fetch failed: %s", exc)
+
+    return gainers[:top]
