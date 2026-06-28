@@ -14,6 +14,16 @@ from bot.trading.scanner import ScanResult
 _ET = ZoneInfo("America/New_York")
 
 
+def _fmt_turnover(usd: float | None) -> str:
+    if usd is None or usd <= 0:
+        return "—"
+    if usd >= 1_000_000:
+        return f"${usd / 1_000_000:.1f} M"
+    if usd >= 1_000:
+        return f"${usd / 1_000:.0f} K"
+    return f"${usd:.0f}"
+
+
 def _fmt_millions(value: float | None) -> str:
     if value is None:
         return "—"
@@ -121,6 +131,8 @@ def build_watchlist_monitor_line(
         fields.append(f"**RVol:** {rvol_text}")
     if scan.daily_volume:
         fields.append(f"**Vol:** {_fmt_millions(float(scan.daily_volume))}")
+    if scan.turnover_usd:
+        fields.append(f"**Turnover:** {_fmt_turnover(scan.turnover_usd)}")
     if pct_from_52w_low is not None:
         fields.append(f"`+{pct_from_52w_low:.1f}% from 52W-Low`")
     if _is_sec_filing(scan):

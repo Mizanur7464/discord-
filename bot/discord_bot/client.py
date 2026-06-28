@@ -152,6 +152,10 @@ class NewsTradingBot(commands.Bot):
         self._news_channel: discord.TextChannel | None = None
         self._mosquito_channel: discord.TextChannel | None = None
         self._potential_channel: discord.TextChannel | None = None
+        self._mc_600m_potential_channel: discord.TextChannel | None = None
+        self._mc_600m_scanner_channel: discord.TextChannel | None = None
+        self._mc_3b_potential_channel: discord.TextChannel | None = None
+        self._mc_3b_scanner_channel: discord.TextChannel | None = None
         self._mosquito_recent: dict[str, float] = {}
         self._watchlist_recent: dict[str, float] = {}
         self._potential_recent: dict[str, float] = {}
@@ -229,7 +233,7 @@ class NewsTradingBot(commands.Bot):
             else:
                 logger.warning("Watchlist channel not found. Falling back to alerts.")
         else:
-            self._watchlist_channel = self._alert_channel
+            self._watchlist_channel = None
 
         if self.settings.summary_channel_id:
             summary_channel = self.get_channel(self.settings.summary_channel_id)
@@ -258,6 +262,22 @@ class NewsTradingBot(commands.Bot):
                 self._potential_channel = potential_channel
             else:
                 logger.warning("Potential channel not found. Check POTENTIAL_CHANNEL_ID.")
+
+        mc_channel_map = [
+            ("mc_600m_potential_channel_id", "_mc_600m_potential_channel", "MC_600M_POTENTIAL_CHANNEL_ID"),
+            ("mc_600m_scanner_channel_id", "_mc_600m_scanner_channel", "MC_600M_SCANNER_CHANNEL_ID"),
+            ("mc_3b_potential_channel_id", "_mc_3b_potential_channel", "MC_3B_POTENTIAL_CHANNEL_ID"),
+            ("mc_3b_scanner_channel_id", "_mc_3b_scanner_channel", "MC_3B_SCANNER_CHANNEL_ID"),
+        ]
+        for setting_attr, channel_attr, env_name in mc_channel_map:
+            channel_id = getattr(self.settings, setting_attr)
+            if not channel_id:
+                continue
+            channel = self.get_channel(channel_id)
+            if isinstance(channel, discord.TextChannel):
+                setattr(self, channel_attr, channel)
+            else:
+                logger.warning("%s channel not found. Check %s.", channel_attr, env_name)
 
         if self.settings.bot.auto_start:
             self._monitoring = True
@@ -585,6 +605,51 @@ class NewsTradingBot(commands.Bot):
             return None
         return (scan.price / low - 1) * 100
 
+    def _meets_turnover_threshold(self, scan: ScanResult) -> bool:
+        """Buyer/consultant: alert only when session turnover reaches ~$1M."""
+        min_turnover = self.settings.trading.scanner_min_turnover_usd
+        if min_turnover <= 0:
+            return True
+        return scan.turnover_usd is not None and scan.turnover_usd >= min_turnover
+
+    def _scanner_mute_channel(self) -> discord.TextChannel | None:
+        return (
+            self._mc_3b_scanner_channel
+            or self._mc_600m_scanner_channel
+            or self._watchlist_channel
+        )
+
+    def _cap_channels(self, scan: ScanResult, kind: str) -> list[discord.TextChannel]:
+        """Route an alert by market cap into the cap-specific channel.
+
+        kind = "scanner" or "potential".
+        <$600M  -> 600m channel + 3b channel (micro is also low-cap).
+        $600M-$3B / unknown -> 3b channel only.
+        >$3B    -> nothing (out of low-cap focus).
+        Falls back to legacy channels only when no cap channels are configured.
+        """
+        if kind == "potential":
+            ch_600m = self._mc_600m_potential_channel
+            ch_3b = self._mc_3b_potential_channel
+            fallback = self._potential_channel
+        else:
+            ch_600m = self._mc_600m_scanner_channel
+            ch_3b = self._mc_3b_scanner_channel
+            fallback = self._watchlist_channel
+
+        if ch_600m or ch_3b:
+            cfg = self.settings.trading
+            mcap = scan.market_cap_usd
+            max_cap = getattr(cfg, "scanner_max_market_cap_usd", 0) or 0
+            micro_cap = getattr(cfg, "scanner_micro_cap_market_cap_usd", 0) or 0
+            channels: list[discord.TextChannel] = []
+            if ch_3b and (max_cap <= 0 or mcap is None or mcap < max_cap):
+                channels.append(ch_3b)
+            if ch_600m and mcap is not None and micro_cap > 0 and mcap < micro_cap:
+                channels.append(ch_600m)
+            return channels
+        return [fallback] if fallback else []
+
     async def _send_scan_alert(
         self,
         scan: ScanResult,
@@ -593,20 +658,21 @@ class NewsTradingBot(commands.Bot):
     ) -> None:
         import time
 
-        channel = self._watchlist_channel or self._alert_channel
-        if not channel:
+        target_channels = self._cap_channels(scan, "scanner")
+        if not target_channels:
             return
-        on_watchlist_channel = self._watchlist_channel is not None and channel.id == self._watchlist_channel.id
-        if on_watchlist_channel:
-            if not self._watchlist_automute.can_send():
-                await self._maybe_notify_watchlist_mute()
-                return
-            if self._watchlist_batch_sent >= self.settings.trading.watchlist_max_alerts_per_batch:
-                return
-            now = time.time()
-            cooldown = self.settings.trading.watchlist_alert_cooldown_seconds
-            if now - self._watchlist_recent.get(scan.symbol, 0) < cooldown:
-                return
+        if not self._meets_turnover_threshold(scan):
+            return
+
+        if not self._watchlist_automute.can_send():
+            await self._maybe_notify_watchlist_mute()
+            return
+        if self._watchlist_batch_sent >= self.settings.trading.watchlist_max_alerts_per_batch:
+            return
+        now = time.time()
+        cooldown = self.settings.trading.watchlist_alert_cooldown_seconds
+        if now - self._watchlist_recent.get(scan.symbol, 0) < cooldown:
+            return
 
         min_score = self._scanner_min_score(scan)
         self._scan_detail_cache[scan.symbol.upper()] = (scan, min_score)
@@ -624,12 +690,12 @@ class NewsTradingBot(commands.Bot):
         content = build_watchlist_monitor_line(
             scan, country_flag=country_flag, news_url=news_url, pct_from_52w_low=pct_low
         )
-        await channel.send(content=f"{content}{_NEWS_GAP}", suppress_embeds=True)
+        for channel in target_channels:
+            await channel.send(content=f"{content}{_NEWS_GAP}", suppress_embeds=True)
 
-        if on_watchlist_channel:
-            self._watchlist_recent[scan.symbol] = time.time()
-            self._watchlist_automute.record_send()
-            self._watchlist_batch_sent += 1
+        self._watchlist_recent[scan.symbol] = time.time()
+        self._watchlist_automute.record_send()
+        self._watchlist_batch_sent += 1
 
     def reset_watchlist_batch_counter(self) -> None:
         self._watchlist_batch_sent = 0
@@ -664,10 +730,15 @@ class NewsTradingBot(commands.Bot):
         liquidity = float(scan.liquidity_expansion or 0)
         if rvol < 1.5 and liquidity < 35:
             return False
+        if not self._meets_turnover_threshold(scan):
+            return False
         return True
 
+    def _has_potential_channel(self) -> bool:
+        return bool(self._mc_600m_potential_channel or self._mc_3b_potential_channel or self._potential_channel)
+
     async def _process_potential_batch(self, scans: list[ScanResult]) -> None:
-        if not self._potential_channel or not self.settings.trading.potential_enabled:
+        if not self._has_potential_channel() or not self.settings.trading.potential_enabled:
             return
         import time
 
@@ -702,7 +773,8 @@ class NewsTradingBot(commands.Bot):
             self._potential_batch_sent += 1
 
     async def _send_potential_alert(self, scan: ScanResult) -> None:
-        if not self._potential_channel:
+        target_channels = self._cap_channels(scan, "potential")
+        if not target_channels:
             return
         min_score = self._scanner_min_score(scan)
         self._scan_detail_cache[scan.symbol.upper()] = (scan, min_score)
@@ -722,7 +794,8 @@ class NewsTradingBot(commands.Bot):
             pct_from_52w_low=pct_low,
             details_url=self._scan_public_url(scan.symbol),
         )
-        await self._potential_channel.send(content=f"{content}{_NEWS_GAP}", suppress_embeds=True)
+        for channel in target_channels:
+            await channel.send(content=f"{content}{_NEWS_GAP}", suppress_embeds=True)
 
     async def _maybe_send_potential_hit(self, symbol: str, article) -> None:
         if not symbol or not self.potential_store.has_active(symbol):
@@ -754,7 +827,8 @@ class NewsTradingBot(commands.Bot):
     async def _maybe_notify_watchlist_mute(self) -> None:
         import time
 
-        if not self._watchlist_channel:
+        channel = self._scanner_mute_channel()
+        if not channel:
             return
         now = time.time()
         if now - self._watchlist_mute_notice_at < 300:
@@ -762,7 +836,7 @@ class NewsTradingBot(commands.Bot):
         remaining = self._watchlist_automute.muted_seconds_remaining
         if remaining <= 0:
             return
-        await self._watchlist_channel.send(
+        await channel.send(
             f"🔇 **Watchlist auto-muted** — too many alerts. Resuming in ~{remaining // 60 or 1} min."
         )
         self._watchlist_mute_notice_at = now

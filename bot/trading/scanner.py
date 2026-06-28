@@ -537,6 +537,21 @@ class SymbolScanner:
             result.reasons.append("catalyst detected")
 
         result.score = max(0, min(100, score))
+
+        # Low-cap focus (buyer/consultant): keep alerts on small caps only.
+        # Flexible via config — raise the ceiling for large-cap catalyst nights.
+        max_mcap = getattr(self.cfg, "scanner_max_market_cap_usd", 0) or 0
+        if (
+            max_mcap > 0
+            and result.market_cap_usd is not None
+            and result.market_cap_usd > max_mcap
+        ):
+            if result.score >= min_score:
+                result.score = min_score - 1
+            result.warnings.append(
+                f"market cap ~${result.market_cap_usd:,.0f} above low-cap max ${max_mcap:,.0f}"
+            )
+
         result.grade = self._grade(result.score)
         if result.score < min_score and not result.warnings:
             result.warnings.append(f"score below {profile.name} threshold ({min_score})")

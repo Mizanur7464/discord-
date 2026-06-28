@@ -78,6 +78,19 @@ def test_watchlist_monitor_line_sec_tag():
     assert "`SEC`" in line
 
 
+def test_watchlist_monitor_line_turnover():
+    scan = _scan(
+        symbol="WYY",
+        price=6.5,
+        session_change_pct=12.0,
+        turnover_usd=1_250_000,
+        score=70,
+        grade="B",
+    )
+    line = build_watchlist_monitor_line(scan)
+    assert "**Turnover:** $1.2 M" in line
+
+
 def test_watchlist_monitor_line_blue_text_link():
     scan = _scan(symbol="WYY", price=6.5, session_change_pct=12.0, score=70, grade="B")
     line = build_watchlist_monitor_line(

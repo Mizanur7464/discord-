@@ -96,6 +96,8 @@ class TradingConfig:
     scanner_min_turnover_usd: float = 1_000_000.0
     scanner_min_price: float = 0.5
     scanner_max_price: float = 20.0
+    scanner_max_market_cap_usd: float = 3_000_000_000.0
+    scanner_micro_cap_market_cap_usd: float = 600_000_000.0
     runner_big_move_percent: float = 50.0
     runner_retention_days: int = 30
     scanner_profiles: dict[str, ScannerProfile] | None = None
@@ -173,6 +175,10 @@ class Settings:
     news_channel_id: int
     mosquito_channel_id: int
     potential_channel_id: int
+    mc_600m_potential_channel_id: int
+    mc_600m_scanner_channel_id: int
+    mc_3b_potential_channel_id: int
+    mc_3b_scanner_channel_id: int
     alpaca_api_key: str
     alpaca_secret_key: str
     alpaca_paper: bool
@@ -254,6 +260,10 @@ def load_settings() -> Settings:
     news_channel = os.getenv("NEWS_CHANNEL_ID", "").strip()
     mosquito_channel = os.getenv("MOSQUITO_CHANNEL_ID", "").strip()
     potential_channel = os.getenv("POTENTIAL_CHANNEL_ID", "").strip()
+    mc_600m_potential_channel = os.getenv("MC_600M_POTENTIAL_CHANNEL_ID", "").strip()
+    mc_600m_scanner_channel = os.getenv("MC_600M_SCANNER_CHANNEL_ID", "").strip()
+    mc_3b_potential_channel = os.getenv("MC_3B_POTENTIAL_CHANNEL_ID", "").strip()
+    mc_3b_scanner_channel = os.getenv("MC_3B_SCANNER_CHANNEL_ID", "").strip()
     user_token = os.getenv("DISCORD_USER_TOKEN", "").strip()
     user_email = os.getenv("DISCORD_USER_EMAIL", "").strip()
     user_password = os.getenv("DISCORD_USER_PASSWORD", "").strip()
@@ -383,6 +393,12 @@ def load_settings() -> Settings:
             scanner_min_turnover_usd=float(trading_raw.get("scanner_min_turnover_usd", 1_000_000)),
             scanner_min_price=float(trading_raw.get("scanner_min_price", 0.5)),
             scanner_max_price=float(trading_raw.get("scanner_max_price", 20.0)),
+            scanner_max_market_cap_usd=float(
+                trading_raw.get("scanner_max_market_cap_usd", 3_000_000_000.0)
+            ),
+            scanner_micro_cap_market_cap_usd=float(
+                trading_raw.get("scanner_micro_cap_market_cap_usd", 600_000_000.0)
+            ),
             runner_big_move_percent=float(trading_raw.get("runner_big_move_percent", 50.0)),
             runner_retention_days=int(trading_raw.get("runner_retention_days", 30)),
             scanner_profiles=load_profiles_from_config(trading_raw.get("scanner_profiles")),
@@ -452,6 +468,10 @@ def load_settings() -> Settings:
         news_channel_id=int(news_channel) if news_channel else forward_dest_id,
         mosquito_channel_id=int(mosquito_channel) if mosquito_channel else 0,
         potential_channel_id=int(potential_channel) if potential_channel else 0,
+        mc_600m_potential_channel_id=int(mc_600m_potential_channel) if mc_600m_potential_channel else 0,
+        mc_600m_scanner_channel_id=int(mc_600m_scanner_channel) if mc_600m_scanner_channel else 0,
+        mc_3b_potential_channel_id=int(mc_3b_potential_channel) if mc_3b_potential_channel else 0,
+        mc_3b_scanner_channel_id=int(mc_3b_scanner_channel) if mc_3b_scanner_channel else 0,
         alpaca_api_key=os.getenv("ALPACA_API_KEY", "").strip(),
         alpaca_secret_key=os.getenv("ALPACA_SECRET_KEY", "").strip(),
         alpaca_paper=os.getenv("ALPACA_PAPER", "true").strip().lower() == "true",

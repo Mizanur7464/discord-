@@ -83,6 +83,8 @@ trading:
   scanner_min_turnover_usd: 1000000         # price * daily volume proxy
   scanner_min_price: 0.5
   scanner_max_price: 20.0
+  scanner_max_market_cap_usd: 3000000000   # low-cap focus (<$3B). #3b-mc channel ceiling; raise for biotech catalyst nights
+  scanner_micro_cap_market_cap_usd: 600000000   # tighter low-cap (<$600M) — #600m-mc channel
   runner_big_move_percent: 50             # star repeat runners after big single-day moves
   runner_retention_days: 30
   intraday_bar_limit: 120                # 1-minute bars for multi-timeframe + pullback
