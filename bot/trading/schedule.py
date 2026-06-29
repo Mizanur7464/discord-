@@ -20,6 +20,15 @@ def _now_et(now: datetime | None = None) -> datetime:
     return current.astimezone(ET)
 
 
+def is_premarket_hours(now: datetime | None = None) -> bool:
+    """True during US pre-market: Mon–Fri 4:00 AM–9:30 AM ET."""
+    current = _now_et(now)
+    if current.weekday() >= 5:
+        return False
+    t = current.time()
+    return EXTENDED_OPEN <= t < REGULAR_OPEN
+
+
 def is_regular_market_hours(now: datetime | None = None) -> bool:
     """True during US regular session: Mon–Fri 9:30 AM–4:00 PM ET."""
     current = _now_et(now)

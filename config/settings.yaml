@@ -80,11 +80,16 @@ trading:
   scanner_min_alert_score: 50             # minimum score to flag as actionable alert
   scanner_min_rvol: 2.0                   # relative volume vs 30-day average
   scanner_min_daily_volume: 500000
-  scanner_min_turnover_usd: 1000000         # price * daily volume proxy
+  scanner_min_turnover_usd: 1000000         # regular session: alert when turnover >= $1M
+  scanner_premarket_min_turnover_usd: 300000  # pre-market: alert when turnover >= $300K
+  scanner_min_change_pct: 5                 # alert when total day change from prev close > 5%
+  scanner_premarket_min_range_pct: 8        # pre-market only: session high-low range >= 8%
   scanner_min_price: 0.5
   scanner_max_price: 20.0
   scanner_max_market_cap_usd: 3000000000   # low-cap focus (<$3B). #3b-mc channel ceiling; raise for biotech catalyst nights
   scanner_micro_cap_market_cap_usd: 600000000   # tighter low-cap (<$600M) — #600m-mc channel
+  news_250m_market_cap_usd: 250000000   # news split: <$250M -> news-250m-mc
+  news_600m_market_cap_usd: 600000000   # news split: <$600M -> news-600m-mc
   runner_big_move_percent: 50             # star repeat runners after big single-day moves
   runner_retention_days: 30
   intraday_bar_limit: 120                # 1-minute bars for multi-timeframe + pullback

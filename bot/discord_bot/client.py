@@ -156,6 +156,8 @@ class NewsTradingBot(commands.Bot):
         self._mc_600m_scanner_channel: discord.TextChannel | None = None
         self._mc_3b_potential_channel: discord.TextChannel | None = None
         self._mc_3b_scanner_channel: discord.TextChannel | None = None
+        self._news_250m_channel: discord.TextChannel | None = None
+        self._news_600m_channel: discord.TextChannel | None = None
         self._mosquito_recent: dict[str, float] = {}
         self._watchlist_recent: dict[str, float] = {}
         self._potential_recent: dict[str, float] = {}
@@ -268,6 +270,8 @@ class NewsTradingBot(commands.Bot):
             ("mc_600m_scanner_channel_id", "_mc_600m_scanner_channel", "MC_600M_SCANNER_CHANNEL_ID"),
             ("mc_3b_potential_channel_id", "_mc_3b_potential_channel", "MC_3B_POTENTIAL_CHANNEL_ID"),
             ("mc_3b_scanner_channel_id", "_mc_3b_scanner_channel", "MC_3B_SCANNER_CHANNEL_ID"),
+            ("news_250m_channel_id", "_news_250m_channel", "NEWS_250M_CHANNEL_ID"),
+            ("news_600m_channel_id", "_news_600m_channel", "NEWS_600M_CHANNEL_ID"),
         ]
         for setting_attr, channel_attr, env_name in mc_channel_map:
             channel_id = getattr(self.settings, setting_attr)
@@ -390,6 +394,39 @@ class NewsTradingBot(commands.Bot):
 
         return list(await asyncio.gather(*[_row(symbol) for symbol in symbols]))
 
+    async def _news_cap_channels(self, symbols: list[str]) -> list[discord.TextChannel]:
+        """Extra cap-split news channels based on the smallest-cap symbol.
+
+        <$250M -> news-250m + news-600m. $250M-$600M -> news-600m only.
+        All news always goes to the main news channel as well.
+        """
+        if not (self._news_250m_channel or self._news_600m_channel):
+            return []
+        if not self.settings.finnhub_api_key:
+            return []
+        from bot.trading.market_data import fetch_market_cap_sync
+
+        caps = await asyncio.gather(
+            *[
+                asyncio.to_thread(fetch_market_cap_sync, symbol, self.settings.finnhub_api_key)
+                for symbol in symbols
+                if symbol
+            ]
+        )
+        caps = [c for c in caps if c is not None and c > 0]
+        if not caps:
+            return []
+        smallest = min(caps)
+        cfg = self.settings.trading
+        cap_250 = getattr(cfg, "news_250m_market_cap_usd", 0) or 0
+        cap_600 = getattr(cfg, "news_600m_market_cap_usd", 0) or 0
+        channels: list[discord.TextChannel] = []
+        if self._news_600m_channel and cap_600 > 0 and smallest < cap_600:
+            channels.append(self._news_600m_channel)
+        if self._news_250m_channel and cap_250 > 0 and smallest < cap_250:
+            channels.append(self._news_250m_channel)
+        return channels
+
     async def _post_benzinga_news(self, article, *, ai_line: str = "") -> None:
         from bot.news.benzinga import BenzingaArticle
 
@@ -408,14 +445,22 @@ class NewsTradingBot(commands.Bot):
             symbol_rows=symbol_rows,
             reader_base_url=self._reader_base_url(),
         )
+        try:
+            cap_channels = await asyncio.wait_for(
+                self._news_cap_channels(article.symbols or []), timeout=5.0
+            )
+        except TimeoutError:
+            cap_channels = []
+        target_channels = [self._news_channel, *cap_channels]
         for block in blocks:
             # Post news + AI line together in one message so Discord never
             # shows an "(edited)" tag.
             content = f"{block}\n{ai_line}{_NEWS_GAP}" if ai_line else f"{block}{_NEWS_GAP}"
-            try:
-                await self._news_channel.send(content, suppress_embeds=True)
-            except Exception as exc:
-                logger.warning("Benzinga news send failed: %s", exc)
+            for channel in target_channels:
+                try:
+                    await channel.send(content, suppress_embeds=True)
+                except Exception as exc:
+                    logger.warning("Benzinga news send failed: %s", exc)
         for symbol in article.symbols:
             await self._maybe_send_potential_hit(symbol, article)
 
@@ -606,11 +651,61 @@ class NewsTradingBot(commands.Bot):
         return (scan.price / low - 1) * 100
 
     def _meets_turnover_threshold(self, scan: ScanResult) -> bool:
-        """Buyer/consultant: alert only when session turnover reaches ~$1M."""
-        min_turnover = self.settings.trading.scanner_min_turnover_usd
+        """Buyer/consultant: pre-market turnover >= $300K, regular >= $1M."""
+        from bot.trading.schedule import is_regular_market_hours
+
+        cfg = self.settings.trading
+        if is_regular_market_hours():
+            min_turnover = cfg.scanner_min_turnover_usd
+        else:
+            min_turnover = getattr(cfg, "scanner_premarket_min_turnover_usd", 300_000) or 0
         if min_turnover <= 0:
             return True
         return scan.turnover_usd is not None and scan.turnover_usd >= min_turnover
+
+    @staticmethod
+    def _total_change_pct(scan: ScanResult) -> float | None:
+        """Total move from previous close (gap + session compound)."""
+        if scan.gap_pct is not None and scan.session_change_pct is not None:
+            return round(
+                ((1 + scan.gap_pct / 100) * (1 + scan.session_change_pct / 100) - 1) * 100,
+                2,
+            )
+        if scan.gap_pct is not None:
+            return scan.gap_pct
+        return scan.session_change_pct
+
+    @staticmethod
+    def _session_range_pct(scan: ScanResult) -> float | None:
+        structure = scan.structure
+        if not structure or structure.session_high is None or structure.session_low is None:
+            return None
+        low = structure.session_low
+        if low <= 0:
+            return None
+        return round((structure.session_high - low) / low * 100, 2)
+
+    def _qualifies_scanner(self, scan: ScanResult) -> bool:
+        """Buyer scanner gates: turnover, change >5%, pre-market range >=8%."""
+        if not self._meets_turnover_threshold(scan):
+            return False
+
+        cfg = self.settings.trading
+        min_change = getattr(cfg, "scanner_min_change_pct", 5.0) or 0
+        if min_change > 0:
+            change_pct = self._total_change_pct(scan)
+            if change_pct is None or change_pct < min_change:
+                return False
+
+        from bot.trading.schedule import is_premarket_hours
+
+        if is_premarket_hours():
+            min_range = getattr(cfg, "scanner_premarket_min_range_pct", 8.0) or 0
+            if min_range > 0:
+                range_pct = self._session_range_pct(scan)
+                if range_pct is None or range_pct < min_range:
+                    return False
+        return True
 
     def _scanner_mute_channel(self) -> discord.TextChannel | None:
         return (
@@ -661,7 +756,7 @@ class NewsTradingBot(commands.Bot):
         target_channels = self._cap_channels(scan, "scanner")
         if not target_channels:
             return
-        if not self._meets_turnover_threshold(scan):
+        if not self._qualifies_scanner(scan):
             return
 
         if not self._watchlist_automute.can_send():

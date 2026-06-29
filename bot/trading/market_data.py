@@ -285,4 +285,65 @@ def fetch_company_profile_sync(symbol: str, finnhub_api_key: str) -> tuple[str, 
         "CH": "🇨🇭",
         "SG": "🇸🇬",
     }
+    mcap = payload.get("marketCapitalization")
+    if mcap:
+        try:
+            cache = _load_mcap_cache()
+            cache[symbol.upper()] = float(mcap) * 1_000_000
+            _save_mcap_cache()
+        except (TypeError, ValueError):
+            pass
     return name, flags.get(country, "🇺🇸")
+
+
+# Disk-backed cache of market cap (USD) so news routing by cap stays stable
+# even if a transient API call fails.
+_MCAP_CACHE_FILE = Path(__file__).resolve().parents[2] / "data" / "mcap_cache.json"
+_mcap_cache: dict[str, float] | None = None
+
+
+def _load_mcap_cache() -> dict[str, float]:
+    global _mcap_cache
+    if _mcap_cache is None:
+        try:
+            raw = json.loads(_MCAP_CACHE_FILE.read_text(encoding="utf-8"))
+            _mcap_cache = {str(k): float(v) for k, v in raw.items() if v}
+        except Exception:
+            _mcap_cache = {}
+    return _mcap_cache
+
+
+def _save_mcap_cache() -> None:
+    if _mcap_cache is None:
+        return
+    try:
+        _MCAP_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _MCAP_CACHE_FILE.write_text(json.dumps(_mcap_cache), encoding="utf-8")
+    except Exception as exc:
+        logger.debug("Market cap cache save failed: %s", exc)
+
+
+def fetch_market_cap_sync(symbol: str, finnhub_api_key: str) -> float | None:
+    """Return market cap in USD (Finnhub profile2 marketCapitalization, millions)."""
+    if not symbol:
+        return None
+    symbol = symbol.upper()
+    cache = _load_mcap_cache()
+    if not finnhub_api_key:
+        return cache.get(symbol)
+    url = (
+        "https://finnhub.io/api/v1/stock/profile2"
+        f"?symbol={quote(symbol)}&token={quote(finnhub_api_key)}"
+    )
+    try:
+        with urlopen(Request(url, headers={"User-Agent": "discord-news-bot/1.0"}), timeout=8) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+        mcap = payload.get("marketCapitalization")
+        if mcap:
+            value = float(mcap) * 1_000_000
+            cache[symbol] = value
+            _save_mcap_cache()
+            return value
+    except Exception as exc:
+        logger.debug("Finnhub market cap fetch failed for %s: %s", symbol, exc)
+    return cache.get(symbol)
