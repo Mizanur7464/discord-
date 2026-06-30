@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import re
 from dataclasses import dataclass
 
 from bot.news.ai_sentiment import AISentimentError, classify_headline
@@ -27,11 +26,6 @@ INSUFFICIENT_INFO_MARKERS = (
     "missing headline",
 )
 
-REIT_FILTER_PATTERN = re.compile(
-    r"\b(?:reit|real estate investment trust|mortgage reit|equity reit)\b",
-    re.IGNORECASE,
-)
-
 
 @dataclass
 class NewsItem:
@@ -50,11 +44,6 @@ class NewsItem:
 class MessageAnalyzer:
     def __init__(self, config: NewsConfig):
         self.config = config
-
-    @staticmethod
-    def _is_reit_or_low_volatility_stock(text: str) -> bool:
-        """Buyer wants REIT / low-volatility income stocks filtered out."""
-        return bool(REIT_FILTER_PATTERN.search(text))
 
     @staticmethod
     def extract_headline(text: str) -> str:
@@ -147,16 +136,12 @@ class MessageAnalyzer:
         head = headline or self.extract_headline(text)
         symbol = extract_stock_symbol(text)
 
-        if self._is_reit_or_low_volatility_stock(f"{head}\n{text}"):
-            sentiment = "ignored"
-            ai_reason = "AI: REIT/low-volatility stock filtered"
-        else:
-            sentiment, ai_reason = await self.detect_sentiment_async(
-                text,
-                headline=head,
-                symbol=symbol,
-                timing_key=timing_key,
-            )
+        sentiment, ai_reason = await self.detect_sentiment_async(
+            text,
+            headline=head,
+            symbol=symbol,
+            timing_key=timing_key,
+        )
 
         if sentiment == "neutral":
             if not self.config.alert_all_news:

@@ -158,6 +158,7 @@ class NewsTradingBot(commands.Bot):
         self._mc_3b_scanner_channel: discord.TextChannel | None = None
         self._news_250m_channel: discord.TextChannel | None = None
         self._news_600m_channel: discord.TextChannel | None = None
+        self._crypto_news_channel: discord.TextChannel | None = None
         self._mosquito_recent: dict[str, float] = {}
         self._watchlist_recent: dict[str, float] = {}
         self._potential_recent: dict[str, float] = {}
@@ -272,6 +273,7 @@ class NewsTradingBot(commands.Bot):
             ("mc_3b_scanner_channel_id", "_mc_3b_scanner_channel", "MC_3B_SCANNER_CHANNEL_ID"),
             ("news_250m_channel_id", "_news_250m_channel", "NEWS_250M_CHANNEL_ID"),
             ("news_600m_channel_id", "_news_600m_channel", "NEWS_600M_CHANNEL_ID"),
+            ("crypto_news_channel_id", "_crypto_news_channel", "CRYPTO_NEWS_CHANNEL_ID"),
         ]
         for setting_attr, channel_attr, env_name in mc_channel_map:
             channel_id = getattr(self.settings, setting_attr)
@@ -451,7 +453,19 @@ class NewsTradingBot(commands.Bot):
             )
         except TimeoutError:
             cap_channels = []
-        target_channels = [self._news_channel, *cap_channels]
+        from bot.news.news_routing import is_crypto_news
+
+        extra_channels: list[discord.TextChannel] = list(cap_channels)
+        if self._crypto_news_channel and is_crypto_news(
+            title=article.title,
+            body=article.body,
+            symbols=article.symbols,
+        ):
+            extra_channels.append(self._crypto_news_channel)
+        target_channels: list[discord.TextChannel] = []
+        for channel in [self._news_channel, *extra_channels]:
+            if channel and channel not in target_channels:
+                target_channels.append(channel)
         for block in blocks:
             # Post news + AI line together in one message so Discord never
             # shows an "(edited)" tag.
