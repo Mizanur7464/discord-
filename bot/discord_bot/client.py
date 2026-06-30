@@ -31,7 +31,11 @@ from bot.utils.timing import log_trade_speed, mark_news_if_absent, mark_step
 
 from bot.discord_bot.mosquito_automute import ChannelAutoMute, MosquitoAutoMute
 from bot.discord_bot.mosquito_embed import build_mosquito_alert
-from bot.discord_bot.news_embed import build_ai_news_line, build_benzinga_news_blocks
+from bot.discord_bot.news_embed import (
+    _format_published_et,
+    build_ai_news_line,
+    build_benzinga_news_blocks,
+)
 
 # Trailing blank line (zero-width space) to add visual spacing between
 # consecutive news posts, matching the SPM/NB look.
@@ -159,6 +163,7 @@ class NewsTradingBot(commands.Bot):
         self._news_250m_channel: discord.TextChannel | None = None
         self._news_600m_channel: discord.TextChannel | None = None
         self._crypto_news_channel: discord.TextChannel | None = None
+        self._world_news_channel: discord.TextChannel | None = None
         self._mosquito_recent: dict[str, float] = {}
         self._watchlist_recent: dict[str, float] = {}
         self._potential_recent: dict[str, float] = {}
@@ -274,6 +279,7 @@ class NewsTradingBot(commands.Bot):
             ("news_250m_channel_id", "_news_250m_channel", "NEWS_250M_CHANNEL_ID"),
             ("news_600m_channel_id", "_news_600m_channel", "NEWS_600M_CHANNEL_ID"),
             ("crypto_news_channel_id", "_crypto_news_channel", "CRYPTO_NEWS_CHANNEL_ID"),
+            ("world_news_channel_id", "_world_news_channel", "WORLD_NEWS_CHANNEL_ID"),
         ]
         for setting_attr, channel_attr, env_name in mc_channel_map:
             channel_id = getattr(self.settings, setting_attr)
@@ -436,6 +442,13 @@ class NewsTradingBot(commands.Bot):
             return
         if self.news_reader_store:
             await asyncio.to_thread(self.news_reader_store.save, article)
+
+        # Buyer: general/world news (no stock symbol) goes to #world-news with a
+        # short AI summary instead of the main per-ticker feed.
+        if self._world_news_channel and not article.symbols:
+            await self._post_world_news(article)
+            return
+
         symbols = article.symbols or [""]
         try:
             symbol_rows = await asyncio.wait_for(self._benzinga_symbol_rows(symbols), timeout=5.0)
@@ -477,6 +490,39 @@ class NewsTradingBot(commands.Bot):
                     logger.warning("Benzinga news send failed: %s", exc)
         for symbol in article.symbols:
             await self._maybe_send_potential_hit(symbol, article)
+
+    async def _post_world_news(self, article) -> None:
+        """Post no-symbol general news to #world-news with a short AI summary."""
+        from bot.news.ai_sentiment import summarize_world_news
+
+        title = article.title.strip()
+        summary = ""
+        if self.settings.news.openai_api_key and self.settings.news.ai_sentiment_enabled:
+            try:
+                summary = await asyncio.wait_for(
+                    summarize_world_news(
+                        title,
+                        api_key=self.settings.news.openai_api_key,
+                        model=self.settings.news.openai_model,
+                        article_text=article.body or "",
+                    ),
+                    timeout=10.0,
+                )
+            except (TimeoutError, Exception) as exc:
+                logger.warning("World-news summary error: %s", exc)
+        published_et = _format_published_et(article.published)
+        header = f"**{published_et}**\n" if published_et else ""
+        link = self._article_public_url(article) or article.url
+        body = f"🌍 **{title}**"
+        if summary and summary.strip().lower() != title.lower():
+            body = f"{body}\n{summary.strip()}"
+        if link:
+            body = f"{body} - [Link]({link})"
+        content = f"{header}{body}{_NEWS_GAP}"
+        try:
+            await self._world_news_channel.send(content, suppress_embeds=True)
+        except Exception as exc:
+            logger.warning("World-news send failed: %s", exc)
 
     async def _analyze_benzinga_article(self, article):
         text = article.title if not article.body else f"{article.title}\n{article.body[:4000]}"

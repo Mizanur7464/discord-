@@ -187,6 +187,7 @@ class Settings:
     news_250m_channel_id: int
     news_600m_channel_id: int
     crypto_news_channel_id: int
+    world_news_channel_id: int
     alpaca_api_key: str
     alpaca_secret_key: str
     alpaca_paper: bool
@@ -275,6 +276,7 @@ def load_settings() -> Settings:
     news_250m_channel = os.getenv("NEWS_250M_CHANNEL_ID", "").strip()
     news_600m_channel = os.getenv("NEWS_600M_CHANNEL_ID", "").strip()
     crypto_news_channel = os.getenv("CRYPTO_NEWS_CHANNEL_ID", "").strip()
+    world_news_channel = os.getenv("WORLD_NEWS_CHANNEL_ID", "").strip()
     user_token = os.getenv("DISCORD_USER_TOKEN", "").strip()
     user_email = os.getenv("DISCORD_USER_EMAIL", "").strip()
     user_password = os.getenv("DISCORD_USER_PASSWORD", "").strip()
@@ -499,6 +501,7 @@ def load_settings() -> Settings:
         news_250m_channel_id=int(news_250m_channel) if news_250m_channel else 0,
         news_600m_channel_id=int(news_600m_channel) if news_600m_channel else 0,
         crypto_news_channel_id=int(crypto_news_channel) if crypto_news_channel else 0,
+        world_news_channel_id=int(world_news_channel) if world_news_channel else 0,
         alpaca_api_key=os.getenv("ALPACA_API_KEY", "").strip(),
         alpaca_secret_key=os.getenv("ALPACA_SECRET_KEY", "").strip(),
         alpaca_paper=os.getenv("ALPACA_PAPER", "true").strip().lower() == "true",
