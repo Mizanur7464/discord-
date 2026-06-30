@@ -513,14 +513,22 @@ class NewsTradingBot(commands.Bot):
                 logger.warning("World-news summary error: %s", exc)
         impact_emoji = {"positive": "🟢", "negative": "🔴", "neutral": "🟡"}.get(impact, "🟡")
         published_et = _format_published_et(article.published)
-        header = f"**{published_et}**\n" if published_et else ""
         link = self._article_public_url(article) or article.url
-        body = f"{impact_emoji} **{title}**"
-        if summary and summary.strip().lower() != title.lower():
-            body = f"{body}\n{summary.strip()}"
+
+        # Format matches other news channels: time, then headline + Link,
+        # then a colour-labelled AI summary line below the news.
+        news_line = f"**{title}**"
         if link:
-            body = f"{body} - [Link]({link})"
-        content = f"{header}{body}{_NEWS_GAP}"
+            news_line = f"{news_line} - [Link]({link})"
+        lines: list[str] = []
+        if published_et:
+            lines.append(f"**{published_et}**")
+        lines.append(news_line)
+        if summary and summary.strip().lower() != title.lower():
+            lines.append(f"{impact_emoji} {summary.strip()}")
+        else:
+            lines.append(f"{impact_emoji} AI summary unavailable")
+        content = "\n".join(lines) + _NEWS_GAP
         try:
             await self._world_news_channel.send(content, suppress_embeds=True)
         except Exception as exc:
