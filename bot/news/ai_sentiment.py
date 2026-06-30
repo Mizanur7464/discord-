@@ -28,8 +28,12 @@ Keep the reason buyer-friendly and specific; do not say "insufficient headline" 
 
 
 SUMMARY_SYSTEM_PROMPT = """You summarize general/world news (politics, economy, macro) for a trading Discord.
-Write ONE short, plain sentence (max 25 words) capturing the key point.
-No preamble, no "this article", no markdown. Just the sentence."""
+
+Return JSON only:
+{"summary":"...","impact":"positive"|"negative"|"neutral"}
+
+summary = 2-3 short, plain sentences capturing the key points. No preamble, no "this article", no markdown.
+impact = overall market/economic tone: positive (bullish/risk-on), negative (bearish/risk-off), or neutral (mixed/no clear market impact)."""
 
 
 class AISentimentError(Exception):
@@ -42,12 +46,15 @@ async def summarize_world_news(
     api_key: str,
     model: str = "gpt-4o-mini",
     article_text: str = "",
-    timeout: float = 10.0,
-) -> str:
-    """Return a short one-sentence summary for no-symbol general/world news."""
+    timeout: float = 12.0,
+) -> tuple[str, str]:
+    """Return (summary, impact) for no-symbol general/world news.
+
+    impact is one of "positive", "negative", "neutral".
+    """
     headline = headline.strip()
     if not headline or not api_key:
-        return headline
+        return headline, "neutral"
 
     article_text = article_text.strip()
     if len(article_text) > 3000:
@@ -59,7 +66,8 @@ async def summarize_world_news(
     payload = {
         "model": model,
         "temperature": 0.2,
-        "max_tokens": 60,
+        "max_tokens": 160,
+        "response_format": {"type": "json_object"},
         "messages": [
             {"role": "system", "content": SUMMARY_SYSTEM_PROMPT},
             {"role": "user", "content": user_text},
@@ -79,12 +87,18 @@ async def summarize_world_news(
                 body = await resp.text()
                 if resp.status != 200:
                     logger.warning("World-news summary HTTP %s: %s", resp.status, body[:200])
-                    return headline
+                    return headline, "neutral"
                 data = json.loads(body)
-                return data["choices"][0]["message"]["content"].strip() or headline
+                content = data["choices"][0]["message"]["content"].strip()
+                parsed = json.loads(content)
+                summary = str(parsed.get("summary", "")).strip() or headline
+                impact = str(parsed.get("impact", "neutral")).strip().lower()
+                if impact not in {"positive", "negative", "neutral"}:
+                    impact = "neutral"
+                return summary, impact
     except (aiohttp.ClientError, KeyError, json.JSONDecodeError) as exc:
         logger.warning("World-news summary failed: %s", exc)
-        return headline
+        return headline, "neutral"
 
 
 def _parse_ai_response(raw: str) -> tuple[str, str]:

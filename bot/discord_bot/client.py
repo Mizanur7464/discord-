@@ -497,23 +497,25 @@ class NewsTradingBot(commands.Bot):
 
         title = article.title.strip()
         summary = ""
+        impact = "neutral"
         if self.settings.news.openai_api_key and self.settings.news.ai_sentiment_enabled:
             try:
-                summary = await asyncio.wait_for(
+                summary, impact = await asyncio.wait_for(
                     summarize_world_news(
                         title,
                         api_key=self.settings.news.openai_api_key,
                         model=self.settings.news.openai_model,
                         article_text=article.body or "",
                     ),
-                    timeout=10.0,
+                    timeout=12.0,
                 )
             except (TimeoutError, Exception) as exc:
                 logger.warning("World-news summary error: %s", exc)
+        impact_emoji = {"positive": "🟢", "negative": "🔴", "neutral": "🟡"}.get(impact, "🟡")
         published_et = _format_published_et(article.published)
         header = f"**{published_et}**\n" if published_et else ""
         link = self._article_public_url(article) or article.url
-        body = f"🌍 **{title}**"
+        body = f"{impact_emoji} **{title}**"
         if summary and summary.strip().lower() != title.lower():
             body = f"{body}\n{summary.strip()}"
         if link:
