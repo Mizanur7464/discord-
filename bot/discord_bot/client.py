@@ -844,65 +844,30 @@ class NewsTradingBot(commands.Bot):
         return (scan.price / low - 1) * 100
 
     def _meets_turnover_threshold(self, scan: ScanResult) -> bool:
-        """Buyer/consultant: pre-market turnover >= $300K, regular >= $1M."""
-        from bot.trading.schedule import is_regular_market_hours
+        from bot.trading.scanner_gates import meets_turnover_threshold
 
-        cfg = self.settings.trading
-        if is_regular_market_hours():
-            min_turnover = cfg.scanner_min_turnover_usd
-        else:
-            min_turnover = getattr(cfg, "scanner_premarket_min_turnover_usd", 300_000) or 0
-        if min_turnover <= 0:
-            return True
-        return scan.turnover_usd is not None and scan.turnover_usd >= min_turnover
+        return meets_turnover_threshold(scan, self.settings.trading)
 
     @staticmethod
     def _total_change_pct(scan: ScanResult) -> float | None:
-        """Total move from previous close (gap + session compound)."""
-        if scan.gap_pct is not None and scan.session_change_pct is not None:
-            return round(
-                ((1 + scan.gap_pct / 100) * (1 + scan.session_change_pct / 100) - 1) * 100,
-                2,
-            )
-        if scan.gap_pct is not None:
-            return scan.gap_pct
-        return scan.session_change_pct
+        from bot.trading.scanner_gates import total_change_pct
+
+        return total_change_pct(scan)
 
     @staticmethod
     def _session_range_pct(scan: ScanResult) -> float | None:
-        structure = scan.structure
-        if not structure or structure.session_high is None or structure.session_low is None:
-            return None
-        low = structure.session_low
-        if low <= 0:
-            return None
-        return round((structure.session_high - low) / low * 100, 2)
+        from bot.trading.scanner_gates import session_range_pct
+
+        return session_range_pct(scan)
 
     def _qualifies_scanner(self, scan: ScanResult) -> bool:
-        """Buyer scanner gates: turnover, change >5%, pre-market range >=8%."""
-        if not self._meets_turnover_threshold(scan):
-            return False
+        from bot.trading.scanner_gates import qualifies_scanner_alert
 
-        cfg = self.settings.trading
-        min_change = getattr(cfg, "scanner_min_change_pct", 5.0) or 0
-        if min_change > 0:
-            change_pct = self._total_change_pct(scan)
-            if change_pct is None or change_pct < min_change:
-                return False
-
-        from bot.trading.schedule import is_premarket_hours
-
-        if is_premarket_hours():
-            min_range = getattr(cfg, "scanner_premarket_min_range_pct", 8.0) or 0
-            if min_range > 0:
-                range_pct = self._session_range_pct(scan)
-                if range_pct is None or range_pct < min_range:
-                    return False
-
-        min_score = self._scanner_min_score(scan)
-        if min_score > 0 and scan.score < min_score:
-            return False
-        return True
+        return qualifies_scanner_alert(
+            scan,
+            self.settings.trading,
+            min_score=self._scanner_min_score(scan),
+        )
 
     def _scanner_mute_channel(self) -> discord.TextChannel | None:
         return (

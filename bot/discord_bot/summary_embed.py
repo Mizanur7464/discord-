@@ -5,10 +5,16 @@ from __future__ import annotations
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+import discord
+
 from bot.trading.scanner import ScanResult
 from bot.trading.schedule import EXTENDED_CLOSE, EXTENDED_OPEN, REGULAR_CLOSE, REGULAR_OPEN
 
 _ET = ZoneInfo("America/New_York")
+
+_TABLE_HEADERS = ["Symbol", "Price", "% ↑", "Vol", "Float", "News"]
+_COL_ALIGNS = ("left", "right", "right", "right", "right", "left")
+_COL_MIN_WIDTH = (6, 5, 5, 5, 6, 4)
 
 
 def _compact_number(value: float | None, *, prefix: str = "", suffix: str = "") -> str:
@@ -36,12 +42,16 @@ def _fmt_pct(pct: float | None) -> str:
 
 
 def _fmt_volume(volume: int | None) -> str:
-    if volume is None:
+    """NuntioBot-style volume: 271 M, 620 k."""
+    if volume is None or volume <= 0:
         return "—"
     if volume >= 1_000_000:
-        return f"{volume / 1_000_000:.1f} m"
+        millions = volume / 1_000_000
+        if millions >= 100:
+            return f"{millions:.0f} M"
+        return f"{millions:.1f} M"
     if volume >= 1_000:
-        return f"{volume / 1_000:.1f} k"
+        return f"{volume / 1_000:.0f} k"
     return str(volume)
 
 
@@ -50,8 +60,8 @@ def _fmt_float(shares: float | None) -> str:
         return "—"
     millions = shares / 1_000_000
     if millions >= 100:
-        return f"{millions:.0f} m"
-    return f"{millions:.1f} m"
+        return f"{millions:.0f}m"
+    return f"{millions:.1f}m"
 
 
 def _news_text(scan: ScanResult) -> str:
@@ -106,7 +116,13 @@ def _short_news_label(scan: ScanResult) -> str:
 
 
 _NEWS_TYPES_KEY = (
-    "**News:** PR = Press Release · AR = Analyst Rating · SF = SEC Filing · * = extra catalyst"
+    "**News Types Key:**\n"
+    "```\n"
+    "PR - Press Release\n"
+    "AR - Analyst Rating\n"
+    "SF - SEC Filing\n"
+    "*  - Additional types of news\n"
+    "```"
 )
 
 
@@ -179,16 +195,41 @@ def _fmt_symbol(symbol: str, watchlist_symbols: set[str]) -> str:
     return sym
 
 
-def _fmt_gainer_line(rank: int, scan: ScanResult, watchlist_symbols: set[str]) -> str:
-    """One compact row — readable on mobile without horizontal scroll."""
-    symbol = _fmt_symbol(scan.symbol, watchlist_symbols)
-    price = _fmt_price(scan.price)
-    pct = scan.session_change_pct
-    pct_text = f"+{_fmt_pct(pct)}%" if pct is not None and pct >= 0 else f"{_fmt_pct(pct)}%"
-    vol = _fmt_volume(scan.daily_volume)
-    flt = _fmt_float(scan.float_shares)
-    news = _short_news_label(scan)
-    return f"{rank}. **{symbol}** · ${price} · {pct_text} · Vol {vol} · Float {flt} · {news}"
+def _nuntio_pipe_table(headers: list[str], rows: list[list[str]]) -> str:
+    """NuntioBot-style simple pipe table inside a monospace code block."""
+    col_count = len(headers)
+    widths = list(_COL_MIN_WIDTH[:col_count])
+    for idx, header in enumerate(headers):
+        widths[idx] = max(widths[idx], len(header))
+    for row in rows:
+        for idx, cell in enumerate(row):
+            widths[idx] = max(widths[idx], len(cell))
+
+    def _fmt_row(cells: list[str], *, header: bool = False) -> str:
+        padded: list[str] = []
+        for idx, cell in enumerate(cells):
+            width = widths[idx]
+            if header:
+                padded.append(cell.center(width))
+            elif _COL_ALIGNS[idx] == "right":
+                padded.append(cell.rjust(width))
+            else:
+                padded.append(cell.ljust(width))
+        return "| " + " | ".join(padded) + " |"
+
+    divider = "|" + "|".join("-" * (width + 2) for width in widths) + "|"
+    return "\n".join([_fmt_row(headers, header=True), divider, *[_fmt_row(row) for row in rows]])
+
+
+def _gainer_row(scan: ScanResult, watchlist_symbols: set[str]) -> list[str]:
+    return [
+        _fmt_symbol(scan.symbol, watchlist_symbols),
+        _fmt_price(scan.price),
+        _fmt_pct(scan.session_change_pct),
+        _fmt_volume(scan.daily_volume),
+        _fmt_float(scan.float_shares),
+        _short_news_label(scan),
+    ]
 
 
 def build_live_summary_message(
@@ -206,25 +247,31 @@ def build_live_summary_message(
     title = _session_title(now)
 
     if gainers:
-        lines = [
-            _fmt_gainer_line(idx, scan, wl) for idx, scan in enumerate(gainers, start=1)
-        ]
-        watchlist_note = "\n★ = on our watchlist" if wl and any(s in wl for s in (g.symbol.upper() for g in gainers)) else ""
-        body = f"**{title}**\n" + "\n".join(lines) + watchlist_note
+        rows = [_gainer_row(scan, wl) for scan in gainers]
+        table = _nuntio_pipe_table(_TABLE_HEADERS, rows)
+        watchlist_note = ""
+        if wl and any(scan.symbol.upper() in wl for scan in gainers):
+            watchlist_note = "\n★ = on our watchlist"
+        body = f"**{title}**\n```\n{table}\n```{watchlist_note}"
     elif scans:
-        body = f"**{title}**\nNo positive movers yet — scanner is running…"
+        body = (
+            f"**{title}**\n"
+            "```\n"
+            "| Symbol | Price | % ↑ | Vol | Float | News |\n"
+            "|--------|-------|-----|--------|-------|------|\n"
+            "| No positive movers yet — scanner is running… |\n"
+            "```"
+        )
     else:
-        body = f"**{title}**\nWaiting for scanner data…"
+        body = f"**{title}**\n```\nWaiting for scanner data…\n```"
 
     when = _relative_updated(data_updated_at or now, now)
-    footer = f"*Updated: {when}*"
+    footer = f"Updated: {when}"
     return f"{body}\n{footer}\n\n{_NEWS_TYPES_KEY}"[:2000]
 
 
 def build_live_summary_embed(*args, **kwargs):
-    """Backward-compatible alias — summary now posts as plain text like NuntioBot."""
-    import discord
-
+    """Backward-compatible alias — summary posts as plain text like NuntioBot."""
     content = build_live_summary_message(*args, **kwargs)
     embed = discord.Embed(description=content[:4096], color=discord.Color.from_rgb(47, 49, 54))
     return embed

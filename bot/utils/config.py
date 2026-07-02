@@ -96,9 +96,11 @@ class TradingConfig:
     scanner_min_rvol: float = 2.0
     scanner_min_daily_volume: int = 500_000
     scanner_min_turnover_usd: float = 1_000_000.0
-    scanner_premarket_min_turnover_usd: float = 300_000.0
-    scanner_min_change_pct: float = 5.0
+    scanner_premarket_min_turnover_usd: float = 1_000_000.0
+    scanner_min_change_pct: float = 10.0
     scanner_premarket_min_range_pct: float = 8.0
+    scanner_min_range_pct: float = 8.0
+    scanner_gate_min_rvol: float = 1.0
     scanner_min_price: float = 0.5
     scanner_max_price: float = 20.0
     scanner_max_market_cap_usd: float = 3_000_000_000.0
@@ -409,12 +411,14 @@ def load_settings() -> Settings:
             scanner_min_daily_volume=int(trading_raw.get("scanner_min_daily_volume", 500_000)),
             scanner_min_turnover_usd=float(trading_raw.get("scanner_min_turnover_usd", 1_000_000)),
             scanner_premarket_min_turnover_usd=float(
-                trading_raw.get("scanner_premarket_min_turnover_usd", 300_000)
+                trading_raw.get("scanner_premarket_min_turnover_usd", 1_000_000)
             ),
-            scanner_min_change_pct=float(trading_raw.get("scanner_min_change_pct", 5.0)),
+            scanner_min_change_pct=float(trading_raw.get("scanner_min_change_pct", 10.0)),
             scanner_premarket_min_range_pct=float(
                 trading_raw.get("scanner_premarket_min_range_pct", 8.0)
             ),
+            scanner_min_range_pct=float(trading_raw.get("scanner_min_range_pct", 8.0)),
+            scanner_gate_min_rvol=float(trading_raw.get("scanner_gate_min_rvol", 1.0)),
             scanner_min_price=float(trading_raw.get("scanner_min_price", 0.5)),
             scanner_max_price=float(trading_raw.get("scanner_max_price", 20.0)),
             scanner_max_market_cap_usd=float(
