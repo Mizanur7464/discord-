@@ -33,8 +33,15 @@ from bot.discord_bot.mosquito_automute import ChannelAutoMute, MosquitoAutoMute
 from bot.discord_bot.mosquito_embed import build_mosquito_alert
 from bot.discord_bot.news_embed import (
     _format_published_et,
-    build_ai_news_line,
     build_benzinga_news_blocks,
+)
+from bot.news.news_intelligence import (
+    NewsImpact,
+    SymbolNewsContext,
+    build_priority_line,
+    build_trader_context_line,
+    classify_impact,
+    resolve_news_routing,
 )
 
 # Trailing blank line (zero-width space) to add visual spacing between
@@ -402,6 +409,60 @@ class NewsTradingBot(commands.Bot):
 
         return list(await asyncio.gather(*[_row(symbol) for symbol in symbols]))
 
+    async def _build_symbol_news_contexts(self, symbols: list[str]) -> dict[str, SymbolNewsContext]:
+        """Trader context (MC, float, RVOL, runner, sector) for news lines."""
+        if not symbols:
+            return {}
+        from bot.trading.market_data import (
+            fetch_float_shares_sync,
+            fetch_market_cap_sync,
+            fetch_symbol_profile_sync,
+        )
+
+        async def _one(symbol: str) -> SymbolNewsContext:
+            symbol = symbol.upper()
+            if not symbol:
+                return SymbolNewsContext(symbol="")
+            float_shares = None
+            profile_market_cap = None
+            country_flag = "🇺🇸"
+            sector = ""
+            if self.settings.finnhub_api_key:
+                float_shares, profile, mcap = await asyncio.gather(
+                    asyncio.to_thread(
+                        fetch_float_shares_sync,
+                        symbol,
+                        self.settings.finnhub_api_key,
+                        massive_api_key=self.settings.benzinga_api_key,
+                    ),
+                    asyncio.to_thread(
+                        fetch_symbol_profile_sync, symbol, self.settings.finnhub_api_key
+                    ),
+                    asyncio.to_thread(
+                        fetch_market_cap_sync, symbol, self.settings.finnhub_api_key
+                    ),
+                )
+                country_flag = profile.country_flag or "🇺🇸"
+                sector = profile.sector
+                profile_market_cap = profile.market_cap_usd or mcap
+            runner = self.runner_history.get(symbol)
+            cached = self._scan_detail_cache.get(symbol)
+            rvol = cached[0].rvol if cached else None
+            return SymbolNewsContext(
+                symbol=symbol,
+                float_shares=float_shares,
+                market_cap_usd=profile_market_cap,
+                country_flag=country_flag,
+                sector=sector,
+                rvol=rvol,
+                is_runner=runner is not None
+                and (runner.stars > 0 or runner.times_seen >= 2),
+                runner_stars=runner.stars if runner else 0,
+            )
+
+        contexts = await asyncio.gather(*[_one(symbol) for symbol in symbols if symbol])
+        return {ctx.symbol: ctx for ctx in contexts}
+
     async def _news_cap_channels(self, symbols: list[str]) -> list[discord.TextChannel]:
         """Extra cap-split news channels based on the smallest-cap symbol.
 
@@ -435,7 +496,13 @@ class NewsTradingBot(commands.Bot):
             channels.append(self._news_250m_channel)
         return channels
 
-    async def _post_benzinga_news(self, article, *, ai_line: str = "") -> None:
+    async def _post_benzinga_news(
+        self,
+        article,
+        *,
+        impact: NewsImpact | None = None,
+        priority_line: str = "",
+    ) -> None:
         from bot.news.benzinga import BenzingaArticle
 
         if not isinstance(article, BenzingaArticle) or not self._news_channel:
@@ -450,39 +517,97 @@ class NewsTradingBot(commands.Bot):
             return
 
         symbols = article.symbols or [""]
+        news_cfg = self.settings.news
+        filter_enabled = getattr(news_cfg, "news_filter_enabled", True)
+        crypto_exclusive = getattr(news_cfg, "crypto_news_exclusive", True)
+        text = article.title if not article.body else f"{article.title}\n{article.body[:4000]}"
+        if impact is None:
+            impact = classify_impact(text)
+
+        from bot.news.news_routing import is_crypto_news
+
+        is_crypto = is_crypto_news(
+            title=article.title,
+            body=article.body,
+            symbols=article.symbols,
+        )
+
+        try:
+            contexts = await asyncio.wait_for(
+                self._build_symbol_news_contexts([s for s in symbols if s]), timeout=5.0
+            )
+        except TimeoutError:
+            logger.warning("Benzinga news context timeout for %s", symbols)
+            contexts = {}
+
+        caps = [c.market_cap_usd for c in contexts.values() if c.market_cap_usd]
+        smallest_mcap = min(caps) if caps else None
+        max_low_cap = self.settings.trading.scanner_max_market_cap_usd
+
+        post_main = True
+        post_cap = True
+        skip_all = False
+        if filter_enabled:
+            post_main, post_cap, skip_all = resolve_news_routing(
+                title=article.title,
+                body=article.body or "",
+                symbols=article.symbols or [],
+                smallest_market_cap_usd=smallest_mcap,
+                max_low_cap_usd=max_low_cap,
+                is_crypto=is_crypto,
+                impact=impact,
+                crypto_exclusive=crypto_exclusive,
+            )
+            if skip_all:
+                logger.info("Skipped low-value news: %s", article.title[:80])
+                return
+
         try:
             symbol_rows = await asyncio.wait_for(self._benzinga_symbol_rows(symbols), timeout=5.0)
         except TimeoutError:
             logger.warning("Benzinga news metadata timeout for %s", symbols)
             symbol_rows = [(symbol, None, "🇺🇸") for symbol in symbols]
+
+        context_lines = {
+            sym: build_trader_context_line(ctx, catalyst=impact.category)
+            for sym, ctx in contexts.items()
+        }
         blocks = build_benzinga_news_blocks(
             article,
             symbol_rows=symbol_rows,
             reader_base_url=self._reader_base_url(),
+            context_lines=context_lines,
+            priority_line=priority_line,
         )
-        try:
-            cap_channels = await asyncio.wait_for(
-                self._news_cap_channels(article.symbols or []), timeout=5.0
-            )
-        except TimeoutError:
-            cap_channels = []
-        from bot.news.news_routing import is_crypto_news
+        if not blocks:
+            return
 
-        extra_channels: list[discord.TextChannel] = list(cap_channels)
-        if self._crypto_news_channel and is_crypto_news(
-            title=article.title,
-            body=article.body,
-            symbols=article.symbols,
-        ):
-            extra_channels.append(self._crypto_news_channel)
+        cap_channels: list[discord.TextChannel] = []
+        if post_cap:
+            try:
+                cap_channels = await asyncio.wait_for(
+                    self._news_cap_channels(article.symbols or []), timeout=5.0
+                )
+            except TimeoutError:
+                cap_channels = []
+
         target_channels: list[discord.TextChannel] = []
-        for channel in [self._news_channel, *extra_channels]:
-            if channel and channel not in target_channels:
-                target_channels.append(channel)
+        if is_crypto and crypto_exclusive and self._crypto_news_channel:
+            target_channels = [self._crypto_news_channel]
+        else:
+            if post_main and self._news_channel:
+                target_channels.append(self._news_channel)
+            for channel in cap_channels:
+                if channel and channel not in target_channels:
+                    target_channels.append(channel)
+            if is_crypto and self._crypto_news_channel and self._crypto_news_channel not in target_channels:
+                target_channels.append(self._crypto_news_channel)
+
+        if not target_channels:
+            return
+
         for block in blocks:
-            # Post news + AI line together in one message so Discord never
-            # shows an "(edited)" tag.
-            content = f"{block}\n{ai_line}{_NEWS_GAP}" if ai_line else f"{block}{_NEWS_GAP}"
+            content = f"{block}{_NEWS_GAP}"
             for channel in target_channels:
                 try:
                     await channel.send(content, suppress_embeds=True)
@@ -562,16 +687,14 @@ class NewsTradingBot(commands.Bot):
         if not isinstance(article, BenzingaArticle):
             return
         try:
-            # Analyze first, then post news + AI line in a single message.
             item = await self._analyze_benzinga_article(article)
-            ai_line = ""
-            if item is not None:
-                ai_line = build_ai_news_line(
-                    sentiment=getattr(item, "sentiment", ""),
-                    reason=getattr(item, "ai_reason", ""),
-                    category=getattr(item, "news_category", ""),
-                )
-            await self._post_benzinga_news(article, ai_line=ai_line)
+            text = article.title if not article.body else f"{article.title}\n{article.body[:4000]}"
+            category = getattr(item, "news_category", "") if item else ""
+            sentiment = getattr(item, "sentiment", "") if item else ""
+            ai_reason = getattr(item, "ai_reason", "") if item else ""
+            impact = classify_impact(text, category=category, sentiment=sentiment)
+            priority_line = build_priority_line(impact=impact, ai_reason=ai_reason)
+            await self._post_benzinga_news(article, impact=impact, priority_line=priority_line)
             await self._finalize_benzinga_ai(article, item)
         except Exception as exc:
             logger.warning("Benzinga ingest failed: %s", exc)
@@ -775,6 +898,10 @@ class NewsTradingBot(commands.Bot):
                 range_pct = self._session_range_pct(scan)
                 if range_pct is None or range_pct < min_range:
                     return False
+
+        min_score = self._scanner_min_score(scan)
+        if min_score > 0 and scan.score < min_score:
+            return False
         return True
 
     def _scanner_mute_channel(self) -> discord.TextChannel | None:

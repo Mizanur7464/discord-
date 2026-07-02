@@ -106,13 +106,7 @@ def _short_news_label(scan: ScanResult) -> str:
 
 
 _NEWS_TYPES_KEY = (
-    "**News Types Key:**\n"
-    "```\n"
-    "PR - Press Release\n"
-    "AR - Analyst Rating\n"
-    "SF - SEC Filing\n"
-    "*  - Additional types of news\n"
-    "```"
+    "**News:** PR = Press Release · AR = Analyst Rating · SF = SEC Filing · * = extra catalyst"
 )
 
 
@@ -185,17 +179,16 @@ def _fmt_symbol(symbol: str, watchlist_symbols: set[str]) -> str:
     return sym
 
 
-def _pipe_table(headers: list[str], rows: list[list[str]]) -> str:
-    widths = [len(header) for header in headers]
-    for row in rows:
-        for idx, cell in enumerate(row):
-            widths[idx] = max(widths[idx], len(cell))
-
-    def _row(cells: list[str]) -> str:
-        return "| " + " | ".join(cell.ljust(widths[idx]) for idx, cell in enumerate(cells)) + " |"
-
-    lines = [_row(headers), *(_row(row) for row in rows)]
-    return "\n".join(lines)
+def _fmt_gainer_line(rank: int, scan: ScanResult, watchlist_symbols: set[str]) -> str:
+    """One compact row — readable on mobile without horizontal scroll."""
+    symbol = _fmt_symbol(scan.symbol, watchlist_symbols)
+    price = _fmt_price(scan.price)
+    pct = scan.session_change_pct
+    pct_text = f"+{_fmt_pct(pct)}%" if pct is not None and pct >= 0 else f"{_fmt_pct(pct)}%"
+    vol = _fmt_volume(scan.daily_volume)
+    flt = _fmt_float(scan.float_shares)
+    news = _short_news_label(scan)
+    return f"{rank}. **{symbol}** · ${price} · {pct_text} · Vol {vol} · Float {flt} · {news}"
 
 
 def build_live_summary_message(
@@ -213,30 +206,15 @@ def build_live_summary_message(
     title = _session_title(now)
 
     if gainers:
-        rows = [
-            [
-                _fmt_symbol(scan.symbol, wl),
-                _fmt_price(scan.price),
-                _fmt_pct(scan.session_change_pct),
-                _fmt_volume(scan.daily_volume),
-                _fmt_float(scan.float_shares),
-                _short_news_label(scan),
-            ]
-            for scan in gainers
+        lines = [
+            _fmt_gainer_line(idx, scan, wl) for idx, scan in enumerate(gainers, start=1)
         ]
-        table = _pipe_table(["Symbol", "Price", "% ↑", "Volume", "Float", "News"], rows)
         watchlist_note = "\n★ = on our watchlist" if wl and any(s in wl for s in (g.symbol.upper() for g in gainers)) else ""
-        body = f"**{title}**\n```\n{table}\n```{watchlist_note}"
+        body = f"**{title}**\n" + "\n".join(lines) + watchlist_note
     elif scans:
-        body = (
-            f"**{title}**\n"
-            "```\n"
-            "| Symbol | Price | % ↑ | Volume | Float | News |\n"
-            "| No positive movers yet — scanner is running… |\n"
-            "```"
-        )
+        body = f"**{title}**\nNo positive movers yet — scanner is running…"
     else:
-        body = f"**{title}**\n```\nWaiting for scanner data…\n```"
+        body = f"**{title}**\nWaiting for scanner data…"
 
     when = _relative_updated(data_updated_at or now, now)
     footer = f"*Updated: {when}*"

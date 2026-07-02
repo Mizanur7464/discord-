@@ -19,6 +19,8 @@ news:
   benzinga_poll_interval_seconds: 15   # poll Massive Benzinga news (was 20)
   reader_enabled: true           # serve paywall-free article pages from API cache
   reader_port: 8787
+  news_filter_enabled: true      # skip routine/gray news; route crypto & large-cap out of main feed
+  crypto_news_exclusive: true   # crypto headlines only in #crypto-news
 
   allowed_url_domains:
     - benzinga.com

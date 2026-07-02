@@ -2,7 +2,6 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from bot.discord_bot.summary_embed import (
-    _pipe_table,
     _relative_updated,
     _short_news_label,
     _top_gainers,
@@ -43,15 +42,7 @@ def test_top_gainers_limit_and_sort():
     assert [scan.symbol for scan in gainers] == ["BBB", "DDD"]
 
 
-def test_pipe_table_alignment():
-    table = _pipe_table(
-        ["Symbol", "Price", "% ↑", "Volume", "News"],
-        [["WYY", "29.48", "68.7", "86.2 k", "PR*"]],
-    )
-    assert "Symbol" in table and "WYY" in table and "86.2 k" in table and "PR*" in table
-
-
-def test_live_summary_message_nuntio_style():
+def test_live_summary_message_mobile_friendly_lines():
     now = datetime(2026, 6, 25, 8, 30, tzinfo=_ET)
     message = build_live_summary_message(
         [_scan("WYY", 68.7, price=29.48, volume=86_200, catalyst_label="Earnings")],
@@ -60,14 +51,17 @@ def test_live_summary_message_nuntio_style():
         data_updated_at=now,
     )
     assert "**Top Gainers ☕ Pre-Market**" in message
-    assert "| WYY" in message
-    assert "68.7" in message
-    assert "86.2 k" in message
+    assert "1. **WYY**" in message
+    assert "$29.48" in message
+    assert "+68.7%" in message
+    assert "Vol 86.2 k" in message
     assert "Float" in message
     assert "PR*" in message
     assert "*Updated: just now*" in message
-    assert "News Types Key" in message
-    assert "```\nPR - Press Release" in message
+    assert "News Types Key" not in message
+    assert "PR = Press Release" in message
+    assert "```" not in message
+    assert "| Symbol |" not in message
 
 
 def test_short_news_label_maps_nb_codes():
@@ -107,5 +101,5 @@ def test_watchlist_symbol_marked_on_market_gainers():
         preserve_order=True,
     )
     assert "★ MRNA" in message
-    assert "| ZZZ" in message
+    assert "ZZZ" in message
     assert "★ = on our watchlist" in message

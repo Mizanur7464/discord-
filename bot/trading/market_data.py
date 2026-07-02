@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import quote
 from urllib.request import Request, urlopen
@@ -251,20 +252,29 @@ def fetch_52week_low_sync(symbol: str, finnhub_api_key: str) -> float | None:
     return cache.get(equity_symbol)
 
 
-def fetch_company_profile_sync(symbol: str, finnhub_api_key: str) -> tuple[str, str]:
-    """Return (company_name, country_flag_emoji)."""
+@dataclass
+class SymbolProfile:
+    name: str = ""
+    country_flag: str = "🇺🇸"
+    sector: str = ""
+    market_cap_usd: float | None = None
+
+
+def fetch_symbol_profile_sync(symbol: str, finnhub_api_key: str) -> SymbolProfile:
+    """Return company profile fields used for news context routing."""
+    symbol = symbol.upper()
     if not finnhub_api_key:
-        return "", "🇺🇸"
+        return SymbolProfile()
     url = (
         "https://finnhub.io/api/v1/stock/profile2"
-        f"?symbol={quote(symbol.upper())}&token={quote(finnhub_api_key)}"
+        f"?symbol={quote(symbol)}&token={quote(finnhub_api_key)}"
     )
     try:
         with urlopen(Request(url, headers={"User-Agent": "discord-news-bot/1.0"}), timeout=8) as resp:
             payload = json.loads(resp.read().decode("utf-8"))
     except Exception as exc:
         logger.debug("Finnhub profile fetch failed for %s: %s", symbol, exc)
-        return "", "🇺🇸"
+        return SymbolProfile()
 
     name = str(payload.get("name") or "").strip()
     country = str(payload.get("country") or "US").upper()
@@ -285,15 +295,29 @@ def fetch_company_profile_sync(symbol: str, finnhub_api_key: str) -> tuple[str, 
         "CH": "🇨🇭",
         "SG": "🇸🇬",
     }
+    sector = str(payload.get("finnhubIndustry") or payload.get("gsector") or "").strip()
+    market_cap_usd = None
     mcap = payload.get("marketCapitalization")
     if mcap:
         try:
+            market_cap_usd = float(mcap) * 1_000_000
             cache = _load_mcap_cache()
-            cache[symbol.upper()] = float(mcap) * 1_000_000
+            cache[symbol] = market_cap_usd
             _save_mcap_cache()
         except (TypeError, ValueError):
-            pass
-    return name, flags.get(country, "🇺🇸")
+            market_cap_usd = None
+    return SymbolProfile(
+        name=name,
+        country_flag=flags.get(country, "🇺🇸"),
+        sector=sector,
+        market_cap_usd=market_cap_usd,
+    )
+
+
+def fetch_company_profile_sync(symbol: str, finnhub_api_key: str) -> tuple[str, str]:
+    """Return (company_name, country_flag_emoji)."""
+    profile = fetch_symbol_profile_sync(symbol, finnhub_api_key)
+    return profile.name, profile.country_flag
 
 
 # Disk-backed cache of market cap (USD) so news routing by cap stays stable

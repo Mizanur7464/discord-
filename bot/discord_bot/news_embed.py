@@ -145,6 +145,8 @@ def build_benzinga_news_blocks(
     *,
     symbol_rows: list[tuple[str, float | None, str]] | None = None,
     reader_base_url: str = "",
+    context_lines: dict[str, str] | None = None,
+    priority_line: str = "",
     **kwargs,
 ) -> list[str]:
     """One Discord message per block — NB spacing between multi-ticker rows."""
@@ -161,8 +163,20 @@ def build_benzinga_news_blocks(
                 reader_base_url=reader_base_url,
                 **kwargs,
             )
-            if line:
-                blocks.append(line)
+            if not line:
+                continue
+            parts = [line]
+            ctx = (context_lines or {}).get(symbol.upper(), "")
+            if ctx:
+                parts.append(ctx)
+            if priority_line:
+                parts.append(priority_line)
+            blocks.append("\n".join(parts))
         return blocks
     line = build_benzinga_news_line(article, reader_base_url=reader_base_url, **kwargs)
-    return [line] if line else []
+    if not line:
+        return []
+    parts = [line]
+    if priority_line:
+        parts.append(priority_line)
+    return ["\n".join(parts)]

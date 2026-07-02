@@ -34,6 +34,8 @@ class NewsConfig:
     reader_enabled: bool = True
     reader_port: int = 8787
     reader_base_url: str = ""
+    news_filter_enabled: bool = True
+    crypto_news_exclusive: bool = True
 
 
 @dataclass
@@ -346,6 +348,8 @@ def load_settings() -> Settings:
             reader_enabled=reader_enabled,
             reader_port=reader_port,
             reader_base_url=reader_base_url,
+            news_filter_enabled=news_raw.get("news_filter_enabled", True),
+            crypto_news_exclusive=news_raw.get("crypto_news_exclusive", True),
         ),
         trading=TradingConfig(
             enabled=trading_raw["enabled"],
