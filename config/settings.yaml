@@ -7,6 +7,7 @@ bot:
   command_prefix: "!"
   name: "Quantiqo"
   auto_start: true
+  alerts_enabled: false         # buyer paused #alerts — set true when channel reopens
 
 news:
   alert_all_news: true          # post every forwarded news to #alerts (including neutral)

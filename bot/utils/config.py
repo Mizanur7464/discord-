@@ -157,6 +157,7 @@ class BotConfig:
     command_prefix: str
     name: str = DEFAULT_BOT_NAME
     auto_start: bool = True
+    alerts_enabled: bool = False
 
 
 @dataclass
@@ -298,13 +299,23 @@ def load_settings() -> Settings:
         raise ValueError(
             "DISCORD_BOT_TOKEN not found. Copy .env.example to .env and add your token."
         )
-    if not alert_channel:
-        raise ValueError(
-            "ALERT_CHANNEL_ID not found. Add the alert output channel ID in .env."
-        )
 
     with open(CONFIG_PATH, encoding="utf-8") as f:
         raw = yaml.safe_load(f)
+
+    bot_raw = raw["bot"]
+    alerts_enabled_env = os.getenv("ALERTS_ENABLED", "").strip().lower()
+    if alerts_enabled_env in {"1", "true", "yes", "on"}:
+        alerts_enabled = True
+    elif alerts_enabled_env in {"0", "false", "no", "off"}:
+        alerts_enabled = False
+    else:
+        alerts_enabled = bool(bot_raw.get("alerts_enabled", False))
+
+    if alerts_enabled and not alert_channel:
+        raise ValueError(
+            "ALERT_CHANNEL_ID not found. Add the alert output channel ID in .env."
+        )
 
     news_raw = raw["news"]
     trading_raw = raw["trading"]
@@ -331,6 +342,7 @@ def load_settings() -> Settings:
             command_prefix=raw["bot"]["command_prefix"],
             name=bot_name or DEFAULT_BOT_NAME,
             auto_start=raw["bot"].get("auto_start", True),
+            alerts_enabled=alerts_enabled,
         ),
         news=NewsConfig(
             source_channel_ids=_parse_channel_ids(source_channels),
@@ -496,7 +508,7 @@ def load_settings() -> Settings:
             require_news_url=forwarder_raw.get("require_news_url", True),
         ),
         discord_token=token,
-        alert_channel_id=int(alert_channel),
+        alert_channel_id=int(alert_channel) if alert_channel else 0,
         watchlist_channel_id=int(watchlist_channel) if watchlist_channel else 0,
         summary_channel_id=int(summary_channel) if summary_channel else 0,
         news_channel_id=int(news_channel) if news_channel else forward_dest_id,

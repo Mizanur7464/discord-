@@ -223,23 +223,32 @@ class NewsTradingBot(commands.Bot):
         logger.info("Slash commands synced.")
 
     async def on_ready(self) -> None:
-        channel = self.get_channel(self.settings.alert_channel_id)
-        if channel and isinstance(channel, discord.TextChannel):
-            self._alert_channel = channel
-            source_count = len(self.settings.news.source_channel_ids)
-            mode_line = (
-                "Mode: semi-automated scanner + alerts (use `/buy SYMBOL` to confirm trades).\n"
-                if self._semi_automated()
-                else "Mode: automatic trading on bullish signals.\n"
-            )
-            await channel.send(
-                f"✅ **{self.settings.bot.name} is online!**\n"
-                f"Watching {source_count} news channel(s) in real time.\n"
-                f"{mode_line}"
-                "Type `/help` to see available commands."
-            )
-        else:
-            logger.error("Alert channel not found. Check ALERT_CHANNEL_ID.")
+        if self.settings.bot.alerts_enabled and self.settings.alert_channel_id:
+            channel = self.get_channel(self.settings.alert_channel_id)
+            if channel and isinstance(channel, discord.TextChannel):
+                self._alert_channel = channel
+                source_count = len(self.settings.news.source_channel_ids)
+                mode_line = (
+                    "Mode: semi-automated scanner + alerts (use `/buy SYMBOL` to confirm trades).\n"
+                    if self._semi_automated()
+                    else "Mode: automatic trading on bullish signals.\n"
+                )
+                try:
+                    await channel.send(
+                        f"✅ **{self.settings.bot.name} is online!**\n"
+                        f"Watching {source_count} news channel(s) in real time.\n"
+                        f"{mode_line}"
+                        "Type `/help` to see available commands."
+                    )
+                except discord.Forbidden:
+                    logger.warning(
+                        "Alerts channel locked or missing Send Messages — alerts disabled for this session."
+                    )
+                    self._alert_channel = None
+            else:
+                logger.error("Alert channel not found. Check ALERT_CHANNEL_ID.")
+        elif not self.settings.bot.alerts_enabled:
+            logger.info("Alerts channel disabled (bot.alerts_enabled=false).")
 
         if self.settings.watchlist_channel_id:
             watchlist_channel = self.get_channel(self.settings.watchlist_channel_id)
