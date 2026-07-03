@@ -710,7 +710,7 @@ class NewsTradingBot(commands.Bot):
 
     async def _summary_loop(self) -> None:
         interval = max(30, self.settings.trading.summary_interval_seconds)
-        tick = max(10, self.settings.trading.summary_live_tick_seconds)
+        tick = max(5, self.settings.trading.summary_live_tick_seconds)
         elapsed = 0
         while True:
             try:
@@ -719,6 +719,8 @@ class NewsTradingBot(commands.Bot):
                         await self._refresh_summary_gainers()
                         await self.summary_publisher.publish(self._summary_channel)
                         elapsed = 0
+                        await asyncio.sleep(1)
+                        await self.summary_publisher.tick_footer(self._summary_channel)
                     else:
                         await self.summary_publisher.tick_footer(self._summary_channel)
             except Exception as exc:

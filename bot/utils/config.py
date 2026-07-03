@@ -137,7 +137,7 @@ class TradingConfig:
     realtime_max_symbols_per_cycle: int = 100
     realtime_batch_rotation: bool = True
     summary_interval_seconds: int = 60
-    summary_live_tick_seconds: int = 30
+    summary_live_tick_seconds: int = 5
     summary_top_gainers_limit: int = 15
     potential_enabled: bool = True
     potential_min_score: int = 45

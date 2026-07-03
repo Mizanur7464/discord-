@@ -152,8 +152,10 @@ def _relative_updated(data_updated_at: datetime | None, now: datetime) -> str:
     if now.tzinfo is None:
         now = now.replace(tzinfo=_ET)
     seconds = max(0, int((now - data_updated_at.astimezone(_ET)).total_seconds()))
-    if seconds < 10:
+    if seconds < 1:
         return "just now"
+    if seconds == 1:
+        return "1 second ago"
     if seconds < 60:
         return f"{seconds} seconds ago"
     minutes = seconds // 60

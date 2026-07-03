@@ -161,7 +161,7 @@ trading:
   realtime_max_symbols_per_cycle: 100
   realtime_batch_rotation: true         # rotate through full 2k watchlist in batches
   summary_interval_seconds: 60         # refresh top-gainer data
-  summary_live_tick_seconds: 30        # edit same message for live clock
+  summary_live_tick_seconds: 5         # edit footer for live "Updated" clock
   summary_top_gainers_limit: 15        # SPM/NB style top movers only
   potential_enabled: true             # pre-gainer potential channel
   potential_min_score: 45
