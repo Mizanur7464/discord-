@@ -11,8 +11,9 @@ import discord
 from bot.discord_bot.gainer_table_image import render_gainer_table_png
 from bot.discord_bot.summary_embed import (
     _top_gainers,
-    build_gainer_summary_embeds,
     build_gainer_table_rows,
+    build_live_summary_footer,
+    build_live_summary_header,
 )
 from bot.trading.scanner import ScanResult
 
@@ -32,12 +33,14 @@ class SummaryPublisher:
         self._market_ordered = False
         self._data_updated_at: datetime | None = None
         self._message: discord.Message | None = None
+        self._footer_message: discord.Message | None = None
 
     def has_data(self) -> bool:
         return bool(self._latest_scans or self._last_mover_scans)
 
     def reset_message(self) -> None:
         self._message = None
+        self._footer_message = None
 
     def update_scans(
         self,
@@ -61,15 +64,19 @@ class SummaryPublisher:
             return self._last_mover_scans
         return self._latest_scans
 
-    def _build_embeds(self, *, now: datetime | None = None) -> list[discord.Embed]:
-        stamp = now or datetime.now(_ET)
-        return build_gainer_summary_embeds(
+    def _build_header(self, *, now: datetime | None = None) -> str:
+        return build_live_summary_header(
             self._effective_scans(),
             top_limit=self.top_limit,
-            updated_at=stamp,
-            data_updated_at=self._data_updated_at,
+            updated_at=now or datetime.now(_ET),
             watchlist_symbols=self._watchlist_symbols,
             preserve_order=self._market_ordered,
+        )
+
+    def _build_footer(self, *, now: datetime | None = None) -> str:
+        return build_live_summary_footer(
+            updated_at=now or datetime.now(_ET),
+            data_updated_at=self._data_updated_at,
         )
 
     def _build_table_file(self) -> discord.File | None:
@@ -87,31 +94,47 @@ class SummaryPublisher:
         )
         return discord.File(png, filename="top-gainers.png")
 
-    async def _post(self, channel: discord.TextChannel, *, now: datetime | None = None) -> bool:
-        embeds = self._build_embeds(now=now)
+    async def _post_header(self, channel: discord.TextChannel, *, now: datetime | None = None) -> bool:
+        header = self._build_header(now=now)
         table_file = self._build_table_file()
         if self._message:
             try:
                 if table_file:
-                    await self._message.edit(content=None, embeds=embeds, attachments=[table_file])
+                    await self._message.edit(content=header, embeds=[], attachments=[table_file])
                 else:
-                    await self._message.edit(content=None, embeds=embeds, attachments=[])
+                    await self._message.edit(content=header, embeds=[], attachments=[])
                 return True
             except discord.NotFound:
                 self._message = None
             except Exception as exc:
-                logger.warning("Summary edit failed: %s", exc)
+                logger.warning("Summary header edit failed: %s", exc)
                 self._message = None
         if table_file:
-            self._message = await channel.send(embeds=embeds, file=table_file)
+            self._message = await channel.send(content=header, file=table_file)
         else:
-            self._message = await channel.send(embeds=embeds)
+            self._message = await channel.send(content=header)
+        return True
+
+    async def _post_footer(self, channel: discord.TextChannel, *, now: datetime | None = None) -> bool:
+        footer = self._build_footer(now=now)
+        if self._footer_message:
+            try:
+                await self._footer_message.edit(content=footer, embeds=[])
+                return True
+            except discord.NotFound:
+                self._footer_message = None
+            except Exception as exc:
+                logger.warning("Summary footer edit failed: %s", exc)
+                self._footer_message = None
+        self._footer_message = await channel.send(content=footer)
         return True
 
     async def publish(self, channel: discord.TextChannel, *, refresh_data: bool = True) -> bool:
         if not self._latest_scans and not self._last_mover_scans:
             return False
-        ok = await self._post(channel)
+        now = datetime.now(_ET)
+        ok = await self._post_header(channel, now=now)
+        ok = await self._post_footer(channel, now=now) and ok
         if ok:
             logger.info("Summary published (%s symbols)", len(self._latest_scans))
         return ok
@@ -120,7 +143,7 @@ class SummaryPublisher:
         if not self._message or (not self._latest_scans and not self._last_mover_scans):
             return False
         try:
-            return await self._post(channel)
+            return await self._post_footer(channel)
         except Exception:
-            self._message = None
+            self._footer_message = None
             return False

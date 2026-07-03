@@ -326,16 +326,15 @@ def build_gainer_table_footer_lines(
     ]
 
 
-def build_live_summary_caption(
+def build_live_summary_header(
     scans: list[ScanResult],
     *,
     top_limit: int = 15,
     updated_at: datetime | None = None,
-    data_updated_at: datetime | None = None,
     watchlist_symbols: set[str] | None = None,
     preserve_order: bool = False,
 ) -> str:
-    """Text above the gainer board (legacy plain-text mode)."""
+    """Plain text above the table PNG (title + watchlist note)."""
     now = updated_at or datetime.now(_ET)
     wl = {s.upper() for s in (watchlist_symbols or set())}
     gainers = _top_gainers(scans, limit=top_limit, preserve_order=preserve_order)
@@ -352,6 +351,36 @@ def build_live_summary_caption(
         body = f"**{title}**\nWaiting for scanner data…"
 
     return body[:2000]
+
+
+def build_live_summary_footer(
+    *,
+    updated_at: datetime | None = None,
+    data_updated_at: datetime | None = None,
+) -> str:
+    """Plain text below the table PNG (Updated + news legend)."""
+    now = updated_at or datetime.now(_ET)
+    when = _relative_updated(data_updated_at or now, now)
+    return f"Updated: {when}\n\n{_NEWS_TYPES_KEY}"[:2000]
+
+
+def build_live_summary_caption(
+    scans: list[ScanResult],
+    *,
+    top_limit: int = 15,
+    updated_at: datetime | None = None,
+    data_updated_at: datetime | None = None,
+    watchlist_symbols: set[str] | None = None,
+    preserve_order: bool = False,
+) -> str:
+    """Backward-compatible alias — header text only."""
+    return build_live_summary_header(
+        scans,
+        top_limit=top_limit,
+        updated_at=updated_at,
+        watchlist_symbols=watchlist_symbols,
+        preserve_order=preserve_order,
+    )
 
 
 def build_live_summary_message(

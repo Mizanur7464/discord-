@@ -66,15 +66,14 @@ def test_live_summary_message_is_caption_only():
     assert "| Symbol |" not in message
 
 
-def test_gainer_table_footer_lines():
+def test_gainer_summary_footer_text():
     now = datetime(2026, 6, 25, 8, 30, tzinfo=_ET)
-    from bot.discord_bot.summary_embed import build_gainer_legend_embed
+    from bot.discord_bot.summary_embed import build_live_summary_footer
 
-    embed = build_gainer_legend_embed(updated_at=now, data_updated_at=now)
-    assert embed.description
-    assert "Updated: just now" in embed.description
-    assert "News Types Key" in embed.description
-    assert "PR - Press Release" in embed.description
+    footer = build_live_summary_footer(updated_at=now, data_updated_at=now)
+    assert "Updated: just now" in footer
+    assert "**News Types Key:**" in footer
+    assert "PR - Press Release" in footer
 
 
 def test_short_news_label_maps_nb_codes():
