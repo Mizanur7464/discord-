@@ -110,7 +110,7 @@ trading:
       min_rvol: 1.5
       min_gap_pct: 3.0
       min_session_change_pct: 2.0
-      min_turnover_usd: 500000
+      min_turnover_usd: 1000000
       min_daily_volume: 300000
       min_alert_score: 45
     regular:

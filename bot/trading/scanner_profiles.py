@@ -39,7 +39,7 @@ DEFAULT_PROFILES: dict[str, ScannerProfile] = {
         min_session_change_pct=2.0,
         max_float_shares=50_000_000,
         max_market_cap_usd=500_000_000,
-        min_turnover_usd=500_000,
+        min_turnover_usd=1_000_000,
         min_daily_volume=300_000,
         min_alert_score=45,
     ),
