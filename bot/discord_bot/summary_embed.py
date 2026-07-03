@@ -13,6 +13,7 @@ from bot.trading.schedule import EXTENDED_CLOSE, EXTENDED_OPEN, REGULAR_CLOSE, R
 _ET = ZoneInfo("America/New_York")
 
 _TABLE_HEADERS = ["Symbol", "Price", "% ↑", "Vol", "Float", "News"]
+GAINER_TABLE_HEADERS = _TABLE_HEADERS
 _COL_ALIGNS = ("left", "right", "right", "right", "right", "left")
 _COL_MIN_WIDTH = (6, 5, 5, 5, 6, 4)
 
@@ -232,6 +233,48 @@ def _gainer_row(scan: ScanResult, watchlist_symbols: set[str]) -> list[str]:
     ]
 
 
+def build_gainer_table_rows(
+    scans: list[ScanResult],
+    *,
+    top_limit: int = 15,
+    watchlist_symbols: set[str] | None = None,
+    preserve_order: bool = False,
+) -> list[list[str]]:
+    wl = {s.upper() for s in (watchlist_symbols or set())}
+    gainers = _top_gainers(scans, limit=top_limit, preserve_order=preserve_order)
+    return [_gainer_row(scan, wl) for scan in gainers]
+
+
+def build_live_summary_caption(
+    scans: list[ScanResult],
+    *,
+    top_limit: int = 15,
+    updated_at: datetime | None = None,
+    data_updated_at: datetime | None = None,
+    watchlist_symbols: set[str] | None = None,
+    preserve_order: bool = False,
+) -> str:
+    """Text caption for the gainer board (title, footer, legend — table is PNG)."""
+    now = updated_at or datetime.now(_ET)
+    wl = {s.upper() for s in (watchlist_symbols or set())}
+    gainers = _top_gainers(scans, limit=top_limit, preserve_order=preserve_order)
+    title = _session_title(now)
+
+    if gainers:
+        watchlist_note = ""
+        if wl and any(scan.symbol.upper() in wl for scan in gainers):
+            watchlist_note = "\n★ = on our watchlist"
+        body = f"**{title}**{watchlist_note}"
+    elif scans:
+        body = f"**{title}**\nNo positive movers yet — scanner is running…"
+    else:
+        body = f"**{title}**\nWaiting for scanner data…"
+
+    when = _relative_updated(data_updated_at or now, now)
+    footer = f"Updated: {when}"
+    return f"{body}\n{footer}\n\n{_NEWS_TYPES_KEY}"[:2000]
+
+
 def build_live_summary_message(
     scans: list[ScanResult],
     *,
@@ -241,33 +284,15 @@ def build_live_summary_message(
     watchlist_symbols: set[str] | None = None,
     preserve_order: bool = False,
 ) -> str:
-    now = updated_at or datetime.now(_ET)
-    wl = {s.upper() for s in (watchlist_symbols or set())}
-    gainers = _top_gainers(scans, limit=top_limit, preserve_order=preserve_order)
-    title = _session_title(now)
-
-    if gainers:
-        rows = [_gainer_row(scan, wl) for scan in gainers]
-        table = _nuntio_pipe_table(_TABLE_HEADERS, rows)
-        watchlist_note = ""
-        if wl and any(scan.symbol.upper() in wl for scan in gainers):
-            watchlist_note = "\n★ = on our watchlist"
-        body = f"**{title}**\n```\n{table}\n```{watchlist_note}"
-    elif scans:
-        body = (
-            f"**{title}**\n"
-            "```\n"
-            "| Symbol | Price | % ↑ | Vol | Float | News |\n"
-            "|--------|-------|-----|--------|-------|------|\n"
-            "| No positive movers yet — scanner is running… |\n"
-            "```"
-        )
-    else:
-        body = f"**{title}**\n```\nWaiting for scanner data…\n```"
-
-    when = _relative_updated(data_updated_at or now, now)
-    footer = f"Updated: {when}"
-    return f"{body}\n{footer}\n\n{_NEWS_TYPES_KEY}"[:2000]
+    """Backward-compatible alias — caption text (table is PNG in live publisher)."""
+    return build_live_summary_caption(
+        scans,
+        top_limit=top_limit,
+        updated_at=updated_at,
+        data_updated_at=data_updated_at,
+        watchlist_symbols=watchlist_symbols,
+        preserve_order=preserve_order,
+    )
 
 
 def build_live_summary_embed(*args, **kwargs):

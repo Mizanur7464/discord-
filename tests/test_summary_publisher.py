@@ -1,5 +1,5 @@
+from bot.discord_bot.summary_embed import build_gainer_table_rows
 from bot.discord_bot.summary_publisher import SummaryPublisher
-from bot.news.benzinga import CatalystResult  # noqa: F401  (kept for parity)
 from bot.trading.scanner import ScanResult
 
 
@@ -18,18 +18,24 @@ def _scan(symbol: str, pct: float) -> ScanResult:
 def test_keeps_previous_movers_when_market_goes_quiet():
     pub = SummaryPublisher()
     pub.update_scans([_scan("AAA", 12.0), _scan("BBB", 8.0)])
-    assert "AAA" in pub._build_content()
+    rows = build_gainer_table_rows(pub._effective_scans(), top_limit=pub.top_limit)
+    assert rows[0][0] == "AAA"
 
-    # Next scan has no positive movers — board should still show AAA/BBB.
     pub.update_scans([_scan("CCC", -3.0)])
-    content = pub._build_content()
-    assert "AAA" in content
-    assert "No positive movers" not in content
+    rows = build_gainer_table_rows(
+        pub._effective_scans(),
+        top_limit=pub.top_limit,
+        preserve_order=pub._market_ordered,
+    )
+    assert rows[0][0] == "AAA"
+    assert pub._build_table_file() is not None
+    assert "No positive movers" not in pub._build_caption()
 
 
 def test_new_mover_replaces_previous():
     pub = SummaryPublisher()
     pub.update_scans([_scan("AAA", 12.0)])
     pub.update_scans([_scan("ZZZ", 20.0)])
-    content = pub._build_content()
-    assert "ZZZ" in content
+    rows = build_gainer_table_rows(pub._effective_scans(), top_limit=pub.top_limit)
+    assert rows[0][0] == "ZZZ"
+    assert "AAA" not in [row[0] for row in rows]

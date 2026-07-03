@@ -5,6 +5,7 @@ from bot.discord_bot.summary_embed import (
     _relative_updated,
     _short_news_label,
     _top_gainers,
+    build_gainer_table_rows,
     build_live_summary_message,
 )
 from bot.news.benzinga import CatalystResult
@@ -44,7 +45,14 @@ def test_top_gainers_limit_and_sort():
     assert [scan.symbol for scan in gainers] == ["BBB", "DDD"]
 
 
-def test_live_summary_message_nuntio_style_table():
+def test_gainer_table_rows_include_all_columns():
+    rows = build_gainer_table_rows(
+        [_scan("WYY", 68.7, price=29.48, volume=86_200, catalyst_label="Earnings")],
+    )
+    assert rows == [["WYY", "29.48", "68.7", "86 k", "12.5m", "PR*"]]
+
+
+def test_live_summary_message_is_caption_only():
     now = datetime(2026, 6, 25, 8, 30, tzinfo=_ET)
     message = build_live_summary_message(
         [_scan("WYY", 68.7, price=29.48, volume=86_200, catalyst_label="Earnings")],
@@ -53,19 +61,10 @@ def test_live_summary_message_nuntio_style_table():
         data_updated_at=now,
     )
     assert "**Top Gainers ☕ Pre-Market**" in message
-    assert "```" in message
-    assert "| Symbol |" in message
-    assert "┌" not in message
-    assert "Float" in message.split("```")[1]
-    assert "WYY" in message
-    assert "29.48" in message
-    assert "68.7" in message
-    assert "86 k" in message
-    assert "12.5m" in message
-    assert "PR*" in message
     assert "Updated: just now" in message
     assert "**News Types Key:**" in message
     assert "PR - Press Release" in message
+    assert "| Symbol |" not in message
 
 
 def test_short_news_label_maps_nb_codes():
@@ -95,15 +94,18 @@ def test_relative_updated_minutes():
 
 def test_watchlist_symbol_marked_on_market_gainers():
     now = datetime(2026, 6, 25, 10, 0, tzinfo=_ET)
-    scans = [_scan("MRNA", 12.5), _scan("ZZZ", 8.0)]
+    rows = build_gainer_table_rows(
+        [_scan("MRNA", 12.5), _scan("ZZZ", 8.0)],
+        watchlist_symbols={"MRNA"},
+        preserve_order=True,
+    )
     message = build_live_summary_message(
-        scans,
+        [_scan("MRNA", 12.5), _scan("ZZZ", 8.0)],
         top_limit=15,
         updated_at=now,
         data_updated_at=now,
         watchlist_symbols={"MRNA"},
         preserve_order=True,
     )
-    assert "★ MRNA" in message
-    assert "ZZZ" in message
+    assert rows[0][0] == "★ MRNA"
     assert "★ = on our watchlist" in message

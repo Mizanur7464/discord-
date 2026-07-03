@@ -8,7 +8,12 @@ from zoneinfo import ZoneInfo
 
 import discord
 
-from bot.discord_bot.summary_embed import _top_gainers, build_live_summary_message
+from bot.discord_bot.gainer_table_image import render_gainer_table_png
+from bot.discord_bot.summary_embed import (
+    _top_gainers,
+    build_gainer_table_rows,
+    build_live_summary_caption,
+)
 from bot.trading.scanner import ScanResult
 
 logger = logging.getLogger(__name__)
@@ -56,8 +61,8 @@ class SummaryPublisher:
             return self._last_mover_scans
         return self._latest_scans
 
-    def _build_content(self, *, now: datetime | None = None) -> str:
-        return build_live_summary_message(
+    def _build_caption(self, *, now: datetime | None = None) -> str:
+        return build_live_summary_caption(
             self._effective_scans(),
             top_limit=self.top_limit,
             updated_at=now or datetime.now(_ET),
@@ -66,29 +71,55 @@ class SummaryPublisher:
             preserve_order=self._market_ordered,
         )
 
+    def _build_table_file(self) -> discord.File | None:
+        rows = build_gainer_table_rows(
+            self._effective_scans(),
+            top_limit=self.top_limit,
+            watchlist_symbols=self._watchlist_symbols,
+            preserve_order=self._market_ordered,
+        )
+        if not rows:
+            return None
+        png = render_gainer_table_png(
+            ["Symbol", "Price", "% ↑", "Vol", "Float", "News"],
+            rows,
+        )
+        return discord.File(png, filename="top-gainers.png")
+
     async def publish(self, channel: discord.TextChannel, *, refresh_data: bool = True) -> bool:
         if not self._latest_scans and not self._last_mover_scans:
             return False
-        content = self._build_content()
+        caption = self._build_caption()
+        table_file = self._build_table_file()
         if self._message:
             try:
-                await self._message.edit(content=content, embed=None)
+                if table_file:
+                    await self._message.edit(content=caption, attachments=[table_file])
+                else:
+                    await self._message.edit(content=caption, attachments=[])
                 return True
             except discord.NotFound:
                 self._message = None
             except Exception as exc:
                 logger.warning("Summary edit failed: %s", exc)
                 self._message = None
-        self._message = await channel.send(content, suppress_embeds=True)
+        if table_file:
+            self._message = await channel.send(content=caption, file=table_file)
+        else:
+            self._message = await channel.send(content=caption, suppress_embeds=True)
         logger.info("Summary published (%s symbols)", len(self._latest_scans))
         return True
 
     async def tick_footer(self, channel: discord.TextChannel) -> bool:
         if not self._message or (not self._latest_scans and not self._last_mover_scans):
             return False
-        content = self._build_content()
+        caption = self._build_caption()
+        table_file = self._build_table_file()
         try:
-            await self._message.edit(content=content, embed=None)
+            if table_file:
+                await self._message.edit(content=caption, attachments=[table_file])
+            else:
+                await self._message.edit(content=caption, attachments=[])
             return True
         except Exception:
             self._message = None
