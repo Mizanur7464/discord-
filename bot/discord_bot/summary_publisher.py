@@ -11,6 +11,7 @@ import discord
 from bot.discord_bot.gainer_table_image import render_gainer_table_png
 from bot.discord_bot.summary_embed import (
     _top_gainers,
+    build_gainer_table_footer_lines,
     build_gainer_table_rows,
     build_live_summary_caption,
 )
@@ -71,7 +72,7 @@ class SummaryPublisher:
             preserve_order=self._market_ordered,
         )
 
-    def _build_table_file(self) -> discord.File | None:
+    def _build_table_file(self, *, now=None) -> discord.File | None:
         rows = build_gainer_table_rows(
             self._effective_scans(),
             top_limit=self.top_limit,
@@ -80,9 +81,15 @@ class SummaryPublisher:
         )
         if not rows:
             return None
+        stamp = now or datetime.now(_ET)
+        footer = build_gainer_table_footer_lines(
+            updated_at=stamp,
+            data_updated_at=self._data_updated_at,
+        )
         png = render_gainer_table_png(
             ["Symbol", "Price", "% ↑", "Vol", "Float", "News"],
             rows,
+            footer_lines=footer,
         )
         return discord.File(png, filename="top-gainers.png")
 

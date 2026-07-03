@@ -5,6 +5,7 @@ from bot.discord_bot.summary_embed import (
     _relative_updated,
     _short_news_label,
     _top_gainers,
+    build_gainer_table_footer_lines,
     build_gainer_table_rows,
     build_live_summary_message,
 )
@@ -61,10 +62,17 @@ def test_live_summary_message_is_caption_only():
         data_updated_at=now,
     )
     assert "**Top Gainers ☕ Pre-Market**" in message
-    assert "Updated: just now" in message
-    assert "**News Types Key:**" in message
-    assert "PR - Press Release" in message
+    assert "Updated:" not in message
+    assert "**News Types Key:**" not in message
     assert "| Symbol |" not in message
+
+
+def test_gainer_table_footer_lines():
+    now = datetime(2026, 6, 25, 8, 30, tzinfo=_ET)
+    lines = build_gainer_table_footer_lines(updated_at=now, data_updated_at=now)
+    assert lines[0] == "Updated: just now"
+    assert "News Types Key:" in lines
+    assert "PR - Press Release" in lines
 
 
 def test_short_news_label_maps_nb_codes():

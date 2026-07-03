@@ -215,7 +215,7 @@ class SymbolScanner:
         if result.price and result.daily_volume:
             result.turnover_usd = result.price * result.daily_volume
 
-        if result.float_shares is None and self._finnhub_api_key:
+        if result.float_shares is None and (self._finnhub_api_key or self._benzinga_api_key):
             from bot.trading.market_data import fetch_float_shares_sync
 
             result.float_shares = fetch_float_shares_sync(

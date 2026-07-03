@@ -245,6 +245,25 @@ def build_gainer_table_rows(
     return [_gainer_row(scan, wl) for scan in gainers]
 
 
+def build_gainer_table_footer_lines(
+    *,
+    updated_at: datetime | None = None,
+    data_updated_at: datetime | None = None,
+) -> list[str]:
+    """Footer rendered below the PNG table (Updated + news legend)."""
+    now = updated_at or datetime.now(_ET)
+    when = _relative_updated(data_updated_at or now, now)
+    return [
+        f"Updated: {when}",
+        "",
+        "News Types Key:",
+        "PR - Press Release",
+        "AR - Analyst Rating",
+        "SF - SEC Filing",
+        "*  - Additional types of news",
+    ]
+
+
 def build_live_summary_caption(
     scans: list[ScanResult],
     *,
@@ -254,7 +273,7 @@ def build_live_summary_caption(
     watchlist_symbols: set[str] | None = None,
     preserve_order: bool = False,
 ) -> str:
-    """Text caption for the gainer board (title, footer, legend — table is PNG)."""
+    """Text above the gainer PNG (title only — footer/legend are in the image)."""
     now = updated_at or datetime.now(_ET)
     wl = {s.upper() for s in (watchlist_symbols or set())}
     gainers = _top_gainers(scans, limit=top_limit, preserve_order=preserve_order)
@@ -270,9 +289,7 @@ def build_live_summary_caption(
     else:
         body = f"**{title}**\nWaiting for scanner data…"
 
-    when = _relative_updated(data_updated_at or now, now)
-    footer = f"Updated: {when}"
-    return f"{body}\n{footer}\n\n{_NEWS_TYPES_KEY}"[:2000]
+    return body[:2000]
 
 
 def build_live_summary_message(

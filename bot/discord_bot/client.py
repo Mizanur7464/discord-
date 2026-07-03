@@ -745,6 +745,20 @@ class NewsTradingBot(commands.Bot):
                 scan.session_change_pct = candidate.change_pct
             scans.append(scan)
 
+        from bot.trading.market_data import fetch_float_shares_sync
+
+        for scan in scans:
+            if scan.float_shares and scan.float_shares > 0:
+                continue
+            shares = await asyncio.to_thread(
+                fetch_float_shares_sync,
+                scan.symbol,
+                self.settings.finnhub_api_key,
+                massive_api_key=self.settings.benzinga_api_key,
+            )
+            if shares:
+                scan.float_shares = shares
+
         watchlist_symbols = {entry.symbol.upper() for entry in self.watchlist.active_entries()}
         self.summary_publisher.update_scans(
             scans,
