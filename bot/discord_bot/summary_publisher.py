@@ -11,9 +11,8 @@ import discord
 from bot.discord_bot.gainer_table_image import render_gainer_table_png
 from bot.discord_bot.summary_embed import (
     _top_gainers,
-    build_gainer_table_footer_lines,
+    build_gainer_summary_embeds,
     build_gainer_table_rows,
-    build_live_summary_caption,
 )
 from bot.trading.scanner import ScanResult
 
@@ -62,17 +61,18 @@ class SummaryPublisher:
             return self._last_mover_scans
         return self._latest_scans
 
-    def _build_caption(self, *, now: datetime | None = None) -> str:
-        return build_live_summary_caption(
+    def _build_embeds(self, *, now: datetime | None = None) -> list[discord.Embed]:
+        stamp = now or datetime.now(_ET)
+        return build_gainer_summary_embeds(
             self._effective_scans(),
             top_limit=self.top_limit,
-            updated_at=now or datetime.now(_ET),
+            updated_at=stamp,
             data_updated_at=self._data_updated_at,
             watchlist_symbols=self._watchlist_symbols,
             preserve_order=self._market_ordered,
         )
 
-    def _build_table_file(self, *, now=None) -> discord.File | None:
+    def _build_table_file(self) -> discord.File | None:
         rows = build_gainer_table_rows(
             self._effective_scans(),
             top_limit=self.top_limit,
@@ -81,29 +81,21 @@ class SummaryPublisher:
         )
         if not rows:
             return None
-        stamp = now or datetime.now(_ET)
-        footer = build_gainer_table_footer_lines(
-            updated_at=stamp,
-            data_updated_at=self._data_updated_at,
-        )
         png = render_gainer_table_png(
             ["Symbol", "Price", "% ↑", "Vol", "Float", "News"],
             rows,
-            footer_lines=footer,
         )
         return discord.File(png, filename="top-gainers.png")
 
-    async def publish(self, channel: discord.TextChannel, *, refresh_data: bool = True) -> bool:
-        if not self._latest_scans and not self._last_mover_scans:
-            return False
-        caption = self._build_caption()
+    async def _post(self, channel: discord.TextChannel, *, now: datetime | None = None) -> bool:
+        embeds = self._build_embeds(now=now)
         table_file = self._build_table_file()
         if self._message:
             try:
                 if table_file:
-                    await self._message.edit(content=caption, attachments=[table_file])
+                    await self._message.edit(content=None, embeds=embeds, attachments=[table_file])
                 else:
-                    await self._message.edit(content=caption, attachments=[])
+                    await self._message.edit(content=None, embeds=embeds, attachments=[])
                 return True
             except discord.NotFound:
                 self._message = None
@@ -111,23 +103,24 @@ class SummaryPublisher:
                 logger.warning("Summary edit failed: %s", exc)
                 self._message = None
         if table_file:
-            self._message = await channel.send(content=caption, file=table_file)
+            self._message = await channel.send(embeds=embeds, file=table_file)
         else:
-            self._message = await channel.send(content=caption, suppress_embeds=True)
-        logger.info("Summary published (%s symbols)", len(self._latest_scans))
+            self._message = await channel.send(embeds=embeds)
         return True
+
+    async def publish(self, channel: discord.TextChannel, *, refresh_data: bool = True) -> bool:
+        if not self._latest_scans and not self._last_mover_scans:
+            return False
+        ok = await self._post(channel)
+        if ok:
+            logger.info("Summary published (%s symbols)", len(self._latest_scans))
+        return ok
 
     async def tick_footer(self, channel: discord.TextChannel) -> bool:
         if not self._message or (not self._latest_scans and not self._last_mover_scans):
             return False
-        caption = self._build_caption()
-        table_file = self._build_table_file()
         try:
-            if table_file:
-                await self._message.edit(content=caption, attachments=[table_file])
-            else:
-                await self._message.edit(content=caption, attachments=[])
-            return True
+            return await self._post(channel)
         except Exception:
             self._message = None
             return False

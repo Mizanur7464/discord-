@@ -29,7 +29,10 @@ def test_keeps_previous_movers_when_market_goes_quiet():
     )
     assert rows[0][0] == "AAA"
     assert pub._build_table_file() is not None
-    assert "No positive movers" not in pub._build_caption()
+    embeds = pub._build_embeds()
+    assert len(embeds) == 2
+    assert embeds[0].title
+    assert "Updated:" in (embeds[1].description or "")
 
 
 def test_new_mover_replaces_previous():

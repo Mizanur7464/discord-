@@ -245,12 +245,74 @@ def build_gainer_table_rows(
     return [_gainer_row(scan, wl) for scan in gainers]
 
 
+def build_gainer_legend_embed(
+    *,
+    updated_at: datetime | None = None,
+    data_updated_at: datetime | None = None,
+) -> discord.Embed:
+    """Updated + news legend — shown below the table image embed."""
+    now = updated_at or datetime.now(_ET)
+    when = _relative_updated(data_updated_at or now, now)
+    body = f"Updated: {when}\n\n{_NEWS_TYPES_KEY}"
+    return discord.Embed(description=body[:4096], color=discord.Color.from_rgb(47, 49, 54))
+
+
+def build_gainer_table_embed(
+    scans: list[ScanResult],
+    *,
+    top_limit: int = 15,
+    updated_at: datetime | None = None,
+    watchlist_symbols: set[str] | None = None,
+    preserve_order: bool = False,
+) -> discord.Embed:
+    """Title + watchlist note + table PNG attachment."""
+    now = updated_at or datetime.now(_ET)
+    wl = {s.upper() for s in (watchlist_symbols or set())}
+    gainers = _top_gainers(scans, limit=top_limit, preserve_order=preserve_order)
+    title = _session_title(now)
+
+    embed = discord.Embed(title=title, color=discord.Color.from_rgb(47, 49, 54))
+    if gainers:
+        if wl and any(scan.symbol.upper() in wl for scan in gainers):
+            embed.description = "★ = on our watchlist"
+    elif scans:
+        embed.description = "No positive movers yet — scanner is running…"
+    else:
+        embed.description = "Waiting for scanner data…"
+
+    embed.set_image(url="attachment://top-gainers.png")
+    return embed
+
+
+def build_gainer_summary_embeds(
+    scans: list[ScanResult],
+    *,
+    top_limit: int = 15,
+    updated_at: datetime | None = None,
+    data_updated_at: datetime | None = None,
+    watchlist_symbols: set[str] | None = None,
+    preserve_order: bool = False,
+) -> list[discord.Embed]:
+    """Table embed first, legend embed second (Discord stacks below the image)."""
+    now = updated_at or datetime.now(_ET)
+    return [
+        build_gainer_table_embed(
+            scans,
+            top_limit=top_limit,
+            updated_at=now,
+            watchlist_symbols=watchlist_symbols,
+            preserve_order=preserve_order,
+        ),
+        build_gainer_legend_embed(updated_at=now, data_updated_at=data_updated_at),
+    ]
+
+
 def build_gainer_table_footer_lines(
     *,
     updated_at: datetime | None = None,
     data_updated_at: datetime | None = None,
 ) -> list[str]:
-    """Footer rendered below the PNG table (Updated + news legend)."""
+    """Plain-text footer lines (legacy — legend is sent as a Discord embed now)."""
     now = updated_at or datetime.now(_ET)
     when = _relative_updated(data_updated_at or now, now)
     return [
@@ -273,7 +335,7 @@ def build_live_summary_caption(
     watchlist_symbols: set[str] | None = None,
     preserve_order: bool = False,
 ) -> str:
-    """Text above the gainer PNG (title only — footer/legend are in the image)."""
+    """Text above the gainer board (legacy plain-text mode)."""
     now = updated_at or datetime.now(_ET)
     wl = {s.upper() for s in (watchlist_symbols or set())}
     gainers = _top_gainers(scans, limit=top_limit, preserve_order=preserve_order)
