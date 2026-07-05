@@ -36,6 +36,9 @@ class NewsConfig:
     reader_base_url: str = ""
     news_filter_enabled: bool = True
     crypto_news_exclusive: bool = True
+    news_intelligence_enabled: bool = True
+    news_timeline_format: bool = True
+    news_universe_max_market_cap_usd: float = 3_000_000_000.0
 
 
 @dataclass
@@ -183,6 +186,11 @@ class Settings:
     watchlist_channel_id: int
     summary_channel_id: int
     news_channel_id: int
+    news_all_channel_id: int
+    news_high_impact_channel_id: int
+    news_medium_impact_channel_id: int
+    news_low_impact_channel_id: int
+    news_noise_channel_id: int
     mosquito_channel_id: int
     potential_channel_id: int
     mc_600m_potential_channel_id: int
@@ -272,6 +280,11 @@ def load_settings() -> Settings:
     watchlist_channel = os.getenv("WATCHLIST_CHANNEL_ID", "").strip()
     summary_channel = os.getenv("SUMMARY_CHANNEL_ID", "").strip()
     news_channel = os.getenv("NEWS_CHANNEL_ID", "").strip()
+    news_all_channel = os.getenv("NEWS_ALL_CHANNEL_ID", "").strip()
+    news_high_impact = os.getenv("NEWS_HIGH_IMPACT_CHANNEL_ID", "").strip()
+    news_medium_impact = os.getenv("NEWS_MEDIUM_IMPACT_CHANNEL_ID", "").strip()
+    news_low_impact = os.getenv("NEWS_LOW_IMPACT_CHANNEL_ID", "").strip()
+    news_noise_channel = os.getenv("NEWS_NOISE_CHANNEL_ID", "").strip()
     mosquito_channel = os.getenv("MOSQUITO_CHANNEL_ID", "").strip()
     potential_channel = os.getenv("POTENTIAL_CHANNEL_ID", "").strip()
     mc_600m_potential_channel = os.getenv("MC_600M_POTENTIAL_CHANNEL_ID", "").strip()
@@ -364,6 +377,11 @@ def load_settings() -> Settings:
             reader_base_url=reader_base_url,
             news_filter_enabled=news_raw.get("news_filter_enabled", True),
             crypto_news_exclusive=news_raw.get("crypto_news_exclusive", True),
+            news_intelligence_enabled=news_raw.get("news_intelligence_enabled", True),
+            news_timeline_format=news_raw.get("news_timeline_format", True),
+            news_universe_max_market_cap_usd=float(
+                news_raw.get("news_universe_max_market_cap_usd", 3_000_000_000.0)
+            ),
         ),
         trading=TradingConfig(
             enabled=trading_raw["enabled"],
@@ -512,6 +530,13 @@ def load_settings() -> Settings:
         watchlist_channel_id=int(watchlist_channel) if watchlist_channel else 0,
         summary_channel_id=int(summary_channel) if summary_channel else 0,
         news_channel_id=int(news_channel) if news_channel else forward_dest_id,
+        news_all_channel_id=int(news_all_channel)
+        if news_all_channel
+        else (int(news_channel) if news_channel else forward_dest_id),
+        news_high_impact_channel_id=int(news_high_impact) if news_high_impact else 0,
+        news_medium_impact_channel_id=int(news_medium_impact) if news_medium_impact else 0,
+        news_low_impact_channel_id=int(news_low_impact) if news_low_impact else 0,
+        news_noise_channel_id=int(news_noise_channel) if news_noise_channel else 0,
         mosquito_channel_id=int(mosquito_channel) if mosquito_channel else 0,
         potential_channel_id=int(potential_channel) if potential_channel else 0,
         mc_600m_potential_channel_id=int(mc_600m_potential_channel) if mc_600m_potential_channel else 0,

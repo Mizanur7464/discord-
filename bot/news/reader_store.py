@@ -50,6 +50,9 @@ class NewsReaderStore:
                 body=str(raw.get("body") or ""),
                 symbols=[str(symbol).upper() for symbol in raw.get("symbols") or [] if symbol],
                 published=str(raw.get("published") or ""),
+                source_name=str(raw.get("source_name") or ""),
+                source_type=str(raw.get("source_type") or ""),
+                original_url=str(raw.get("original_url") or raw.get("url") or ""),
             )
         except Exception as exc:
             logger.warning("News reader cache read failed for %s: %s", article_id, exc)

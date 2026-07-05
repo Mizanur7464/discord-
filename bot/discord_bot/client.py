@@ -34,13 +34,19 @@ from bot.discord_bot.mosquito_embed import build_mosquito_alert
 from bot.discord_bot.news_embed import (
     _format_published_et,
     build_benzinga_news_blocks,
+    build_timeline_news_blocks,
 )
+from bot.news.impact_routing import resolve_impact_post_targets
+from bot.news.ai_output import NewsAIOutput
 from bot.news.news_intelligence import (
     NewsImpact,
     SymbolNewsContext,
     build_priority_line,
     build_trader_context_line,
     classify_impact,
+    is_options_news,
+    is_out_of_news_universe,
+    is_dilution_news,
     resolve_news_routing,
 )
 
@@ -161,6 +167,11 @@ class NewsTradingBot(commands.Bot):
         self._watchlist_channel: discord.TextChannel | None = None
         self._summary_channel: discord.TextChannel | None = None
         self._news_channel: discord.TextChannel | None = None
+        self._news_all_channel: discord.TextChannel | None = None
+        self._news_high_channel: discord.TextChannel | None = None
+        self._news_medium_channel: discord.TextChannel | None = None
+        self._news_low_channel: discord.TextChannel | None = None
+        self._news_noise_channel: discord.TextChannel | None = None
         self._mosquito_channel: discord.TextChannel | None = None
         self._potential_channel: discord.TextChannel | None = None
         self._mc_600m_potential_channel: discord.TextChannel | None = None
@@ -272,6 +283,25 @@ class NewsTradingBot(commands.Bot):
                 self._news_channel = news_channel
             else:
                 logger.warning("News channel not found. Check NEWS_CHANNEL_ID.")
+
+        impact_channel_map = [
+            ("news_all_channel_id", "_news_all_channel", "NEWS_ALL_CHANNEL_ID"),
+            ("news_high_impact_channel_id", "_news_high_channel", "NEWS_HIGH_IMPACT_CHANNEL_ID"),
+            ("news_medium_impact_channel_id", "_news_medium_channel", "NEWS_MEDIUM_IMPACT_CHANNEL_ID"),
+            ("news_low_impact_channel_id", "_news_low_channel", "NEWS_LOW_IMPACT_CHANNEL_ID"),
+            ("news_noise_channel_id", "_news_noise_channel", "NEWS_NOISE_CHANNEL_ID"),
+        ]
+        for setting_attr, channel_attr, env_name in impact_channel_map:
+            channel_id = getattr(self.settings, setting_attr)
+            if not channel_id:
+                continue
+            channel = self.get_channel(channel_id)
+            if isinstance(channel, discord.TextChannel):
+                setattr(self, channel_attr, channel)
+            else:
+                logger.warning("%s channel not found. Check %s.", channel_attr, env_name)
+        if not self._news_all_channel:
+            self._news_all_channel = self._news_channel
 
         if self.settings.mosquito_channel_id:
             mosquito_channel = self.get_channel(self.settings.mosquito_channel_id)
@@ -427,6 +457,15 @@ class NewsTradingBot(commands.Bot):
             fetch_market_cap_sync,
             fetch_symbol_profile_sync,
         )
+        from bot.trading.schedule import is_premarket_hours
+
+        def _peak_time_et(peak_at: float) -> str:
+            if not peak_at:
+                return ""
+            from datetime import datetime
+            from zoneinfo import ZoneInfo
+
+            return datetime.fromtimestamp(peak_at, tz=ZoneInfo("America/New_York")).strftime("%H:%M")
 
         async def _one(symbol: str) -> SymbolNewsContext:
             symbol = symbol.upper()
@@ -436,6 +475,7 @@ class NewsTradingBot(commands.Bot):
             profile_market_cap = None
             country_flag = "🇺🇸"
             sector = ""
+            exchange = ""
             if self.settings.finnhub_api_key:
                 float_shares, profile, mcap = await asyncio.gather(
                     asyncio.to_thread(
@@ -453,17 +493,46 @@ class NewsTradingBot(commands.Bot):
                 )
                 country_flag = profile.country_flag or "🇺🇸"
                 sector = profile.sector
+                exchange = profile.exchange
                 profile_market_cap = profile.market_cap_usd or mcap
             runner = self.runner_history.get(symbol)
             cached = self._scan_detail_cache.get(symbol)
-            rvol = cached[0].rvol if cached else None
+            price = None
+            session_change_pct = None
+            rvol = None
+            turnover = None
+            peak_rvol = None
+            peak_rvol_at = ""
+            if cached:
+                scan = cached[0]
+                price = scan.price
+                session_change_pct = scan.session_change_pct
+                rvol = scan.rvol
+                turnover = scan.turnover_usd
+                peak_rvol = scan.peak_rvol
+                if scan.peak_rvol_at:
+                    peak_rvol_at = scan.peak_rvol_at[:5] if len(scan.peak_rvol_at) >= 5 else scan.peak_rvol_at
+            else:
+                peak_record = self.scanner._peak_rvol_store.get(symbol)
+                if peak_record:
+                    peak_rvol = peak_record.peak_rvol or None
+                    peak_rvol_at = _peak_time_et(peak_record.peak_at)
+            session_turnover = turnover
+            pm_turnover = turnover if is_premarket_hours() else None
             return SymbolNewsContext(
                 symbol=symbol,
                 float_shares=float_shares,
                 market_cap_usd=profile_market_cap,
                 country_flag=country_flag,
                 sector=sector,
+                exchange=exchange,
                 rvol=rvol,
+                peak_rvol=peak_rvol,
+                peak_rvol_at=peak_rvol_at,
+                price=price,
+                session_change_pct=session_change_pct,
+                session_turnover_usd=session_turnover,
+                premarket_turnover_usd=pm_turnover,
                 is_runner=runner is not None
                 and (runner.stars > 0 or runner.times_seen >= 2),
                 runner_stars=runner.stars if runner else 0,
@@ -505,16 +574,58 @@ class NewsTradingBot(commands.Bot):
             channels.append(self._news_250m_channel)
         return channels
 
+    def _news_intelligence_enabled(self) -> bool:
+        return getattr(self.settings.news, "news_intelligence_enabled", True)
+
+    def _impact_channels_ready(self) -> bool:
+        return any(
+            (
+                self._news_all_channel,
+                self._news_high_channel,
+                self._news_medium_channel,
+                self._news_low_channel,
+                self._news_noise_channel,
+            )
+        )
+
+    def _resolve_impact_channels(self, keys: frozenset[str]) -> list[discord.TextChannel]:
+        mapping: dict[str, discord.TextChannel | None] = {
+            "all_news": self._news_all_channel or self._news_channel,
+            "high": self._news_high_channel,
+            "medium": self._news_medium_channel,
+            "low": self._news_low_channel,
+            "noise": self._news_noise_channel,
+        }
+        seen: set[int] = set()
+        channels: list[discord.TextChannel] = []
+        for key in keys:
+            channel = mapping.get(key)
+            if channel and channel.id not in seen:
+                seen.add(channel.id)
+                channels.append(channel)
+        return channels
+
     async def _post_benzinga_news(
         self,
         article,
         *,
         impact: NewsImpact | None = None,
         priority_line: str = "",
+        sentiment: str = "",
+        dilution_risk: bool | None = None,
+        ai_output: NewsAIOutput | None = None,
     ) -> None:
         from bot.news.benzinga import BenzingaArticle
+        from bot.news.ai_output import NewsAIOutput as _NewsAIOutput
+        from bot.news.crowd_attention import compute_crowd_attention_score
+        from bot.news.smart_alert import evaluate_smart_alert
+        from bot.news.source_traceability import build_source_traceability
+        from bot.news.timeline_evolution import record_timeline_event
+        from datetime import datetime, timezone
 
-        if not isinstance(article, BenzingaArticle) or not self._news_channel:
+        if not isinstance(article, BenzingaArticle):
+            return
+        if not self._news_channel and not self._impact_channels_ready():
             return
         if self.news_reader_store:
             await asyncio.to_thread(self.news_reader_store.save, article)
@@ -529,9 +640,18 @@ class NewsTradingBot(commands.Bot):
         news_cfg = self.settings.news
         filter_enabled = getattr(news_cfg, "news_filter_enabled", True)
         crypto_exclusive = getattr(news_cfg, "crypto_news_exclusive", True)
+        intelligence = self._news_intelligence_enabled()
+        timeline = getattr(news_cfg, "news_timeline_format", True)
         text = article.title if not article.body else f"{article.title}\n{article.body[:4000]}"
         if impact is None:
-            impact = classify_impact(text)
+            impact = classify_impact(
+                text,
+                symbol=symbols[0] if symbols and symbols[0] else "",
+                article_id=str(getattr(article, "article_id", "")),
+                source="benzinga",
+            )
+        if dilution_risk is None:
+            dilution_risk = impact.dilution_risk if impact else is_dilution_news(text)
 
         from bot.news.news_routing import is_crypto_news
 
@@ -551,25 +671,43 @@ class NewsTradingBot(commands.Bot):
 
         caps = [c.market_cap_usd for c in contexts.values() if c.market_cap_usd]
         smallest_mcap = min(caps) if caps else None
-        max_low_cap = self.settings.trading.scanner_max_market_cap_usd
+        max_universe = float(
+            getattr(news_cfg, "news_universe_max_market_cap_usd", 0)
+            or self.settings.trading.scanner_max_market_cap_usd
+        )
 
-        post_main = True
-        post_cap = True
-        skip_all = False
-        if filter_enabled:
-            post_main, post_cap, skip_all = resolve_news_routing(
-                title=article.title,
-                body=article.body or "",
-                symbols=article.symbols or [],
-                smallest_market_cap_usd=smallest_mcap,
-                max_low_cap_usd=max_low_cap,
-                is_crypto=is_crypto,
-                impact=impact,
-                crypto_exclusive=crypto_exclusive,
+        if intelligence:
+            impact_keys, skip_all = resolve_impact_post_targets(
+                impact,
+                news_filter_enabled=filter_enabled,
+                out_of_universe=is_out_of_news_universe(smallest_mcap, max_universe),
+                is_options_without_symbol=is_options_news(
+                    title=article.title, body=article.body or ""
+                )
+                and not (article.symbols or []),
             )
             if skip_all:
-                logger.info("Skipped low-value news: %s", article.title[:80])
+                logger.info("Skipped news (intelligence): %s", article.title[:80])
                 return
+        else:
+            post_main = True
+            post_cap = True
+            skip_all = False
+            if filter_enabled:
+                post_main, post_cap, skip_all = resolve_news_routing(
+                    title=article.title,
+                    body=article.body or "",
+                    symbols=article.symbols or [],
+                    smallest_market_cap_usd=smallest_mcap,
+                    max_low_cap_usd=max_universe,
+                    is_crypto=is_crypto,
+                    impact=impact,
+                    crypto_exclusive=crypto_exclusive,
+                    intelligence_mode=False,
+                )
+                if skip_all:
+                    logger.info("Skipped low-value news: %s", article.title[:80])
+                    return
 
         try:
             symbol_rows = await asyncio.wait_for(self._benzinga_symbol_rows(symbols), timeout=5.0)
@@ -577,33 +715,117 @@ class NewsTradingBot(commands.Bot):
             logger.warning("Benzinga news metadata timeout for %s", symbols)
             symbol_rows = [(symbol, None, "🇺🇸") for symbol in symbols]
 
-        context_lines = {
-            sym: build_trader_context_line(ctx, catalyst=impact.category)
-            for sym, ctx in contexts.items()
-        }
-        blocks = build_benzinga_news_blocks(
+        reader_url = self._reader_base_url()
+        first_detected = datetime.now(timezone.utc).isoformat()
+        source_trace = build_source_traceability(
             article,
-            symbol_rows=symbol_rows,
-            reader_base_url=self._reader_base_url(),
-            context_lines=context_lines,
-            priority_line=priority_line,
+            first_detected_iso=first_detected,
+            mirror_url=reader_article_url(reader_url, article.article_id),
+            negated=bool(getattr(impact, "negated", False)) if impact else False,
         )
+        ai_outputs: dict[str, _NewsAIOutput] = {}
+        primary_sym = symbols[0].upper() if symbols and symbols[0] else ""
+        if intelligence and timeline:
+            for sym, ctx in contexts.items():
+                base = ai_output
+                if base is None:
+                    continue
+                if sym != primary_sym and len(symbols) > 1:
+                    continue
+                crowd = compute_crowd_attention_score(
+                    impact_level=impact.level,
+                    context=ctx,
+                    repeated_pr=bool(getattr(impact, "repeated_pr", False)),
+                )
+                timeline_label = f"{impact.emoji} {impact.category or impact.catalyst_type or 'News'}"
+                timeline_note = record_timeline_event(sym, timeline_label)
+                smart = evaluate_smart_alert(impact, ctx, crowd_score=crowd, repeated_pr=impact.repeated_pr)
+                ai_outputs[sym] = _NewsAIOutput(
+                    impact_level=base.impact_level,
+                    impact_emoji=base.impact_emoji,
+                    sentiment=base.sentiment,
+                    confidence=base.confidence,
+                    dilution_risk=base.dilution_risk,
+                    liquidity_risk=base.liquidity_risk,
+                    category=base.category,
+                    keyword=base.keyword,
+                    summary=base.summary,
+                    suggested_action=base.suggested_action,
+                    catalyst_type=base.catalyst_type,
+                    catalyst_tags=base.catalyst_tags,
+                    crowd_attention_score=crowd,
+                    smart_alert=smart,
+                    timeline_note=timeline_note,
+                )
+            if ai_output and primary_sym and primary_sym not in ai_outputs:
+                ctx = contexts.get(primary_sym)
+                crowd = compute_crowd_attention_score(
+                    impact_level=impact.level,
+                    context=ctx,
+                    repeated_pr=bool(getattr(impact, "repeated_pr", False)),
+                )
+                timeline_note = record_timeline_event(
+                    primary_sym,
+                    f"{impact.emoji} {impact.category or impact.catalyst_type or 'News'}",
+                )
+                smart = evaluate_smart_alert(impact, ctx, crowd_score=crowd, repeated_pr=impact.repeated_pr)
+                ai_outputs[primary_sym] = _NewsAIOutput(
+                    impact_level=ai_output.impact_level,
+                    impact_emoji=ai_output.impact_emoji,
+                    sentiment=ai_output.sentiment,
+                    confidence=ai_output.confidence,
+                    dilution_risk=ai_output.dilution_risk,
+                    liquidity_risk=ai_output.liquidity_risk,
+                    category=ai_output.category,
+                    keyword=ai_output.keyword,
+                    summary=ai_output.summary,
+                    suggested_action=ai_output.suggested_action,
+                    catalyst_type=ai_output.catalyst_type,
+                    catalyst_tags=ai_output.catalyst_tags,
+                    crowd_attention_score=crowd,
+                    smart_alert=smart,
+                    timeline_note=timeline_note,
+                )
+            blocks = build_timeline_news_blocks(
+                article,
+                symbol_rows=symbol_rows,
+                reader_base_url=reader_url,
+                contexts=contexts,
+                impact=impact,
+                sentiment=sentiment,
+                dilution_risk=dilution_risk,
+                ai_outputs=ai_outputs or None,
+                source_trace=source_trace,
+            )
+        else:
+            context_lines = {
+                sym: build_trader_context_line(ctx, catalyst=impact.category)
+                for sym, ctx in contexts.items()
+            }
+            blocks = build_benzinga_news_blocks(
+                article,
+                symbol_rows=symbol_rows,
+                reader_base_url=reader_url,
+                context_lines=context_lines,
+                priority_line=priority_line,
+            )
         if not blocks:
             return
-
-        cap_channels: list[discord.TextChannel] = []
-        if post_cap:
-            try:
-                cap_channels = await asyncio.wait_for(
-                    self._news_cap_channels(article.symbols or []), timeout=5.0
-                )
-            except TimeoutError:
-                cap_channels = []
 
         target_channels: list[discord.TextChannel] = []
         if is_crypto and crypto_exclusive and self._crypto_news_channel:
             target_channels = [self._crypto_news_channel]
+        elif intelligence:
+            target_channels = self._resolve_impact_channels(impact_keys)
         else:
+            cap_channels: list[discord.TextChannel] = []
+            if post_cap:
+                try:
+                    cap_channels = await asyncio.wait_for(
+                        self._news_cap_channels(article.symbols or []), timeout=5.0
+                    )
+                except TimeoutError:
+                    cap_channels = []
             if post_main and self._news_channel:
                 target_channels.append(self._news_channel)
             for channel in cap_channels:
@@ -693,6 +915,8 @@ class NewsTradingBot(commands.Bot):
     async def _ingest_benzinga_article(self, article) -> None:
         from bot.news.benzinga import BenzingaArticle
 
+        from bot.news.source_traceability import detect_source_key
+
         if not isinstance(article, BenzingaArticle):
             return
         try:
@@ -701,9 +925,49 @@ class NewsTradingBot(commands.Bot):
             category = getattr(item, "news_category", "") if item else ""
             sentiment = getattr(item, "sentiment", "") if item else ""
             ai_reason = getattr(item, "ai_reason", "") if item else ""
-            impact = classify_impact(text, category=category, sentiment=sentiment)
-            priority_line = build_priority_line(impact=impact, ai_reason=ai_reason)
-            await self._post_benzinga_news(article, impact=impact, priority_line=priority_line)
+            source_key = detect_source_key(
+                source_name=article.source_name,
+                url=article.url or article.original_url,
+                text=text,
+            )
+            impact = classify_impact(
+                text,
+                category=category,
+                sentiment=sentiment,
+                symbol=article.symbols[0] if article.symbols else "",
+                article_id=str(article.article_id),
+                source=source_key,
+            )
+            from bot.news.ai_output import build_ai_output_from_rules, classify_news_ai_output
+
+            ai_output = build_ai_output_from_rules(impact, sentiment=sentiment, ai_reason=ai_reason)
+            news_cfg = self.settings.news
+            if news_cfg.openai_api_key and news_cfg.ai_sentiment_enabled:
+                try:
+                    enriched = await asyncio.wait_for(
+                        classify_news_ai_output(
+                            headline=article.title,
+                            article_text=article.body or "",
+                            symbol=article.symbols[0] if article.symbols else "",
+                            impact=impact,
+                            api_key=news_cfg.openai_api_key,
+                            model=news_cfg.openai_model,
+                        ),
+                        timeout=14.0,
+                    )
+                    if enriched:
+                        ai_output = enriched
+                except TimeoutError:
+                    logger.warning("News AI output timeout for %s", article.title[:80])
+            priority_line = build_priority_line(impact=impact, ai_reason=ai_output.summary or ai_reason)
+            await self._post_benzinga_news(
+                article,
+                impact=impact,
+                priority_line=priority_line,
+                sentiment=ai_output.sentiment.lower() if ai_output.sentiment else sentiment,
+                dilution_risk=impact.dilution_risk,
+                ai_output=ai_output,
+            )
             await self._finalize_benzinga_ai(article, item)
         except Exception as exc:
             logger.warning("Benzinga ingest failed: %s", exc)

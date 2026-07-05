@@ -41,6 +41,9 @@ class BenzingaArticle:
     body: str = ""
     symbols: list[str] = field(default_factory=list)
     published: str = ""
+    source_name: str = ""
+    source_type: str = ""
+    original_url: str = ""
 
 
 def _news_items_from_payload(payload) -> list[dict]:
@@ -74,6 +77,23 @@ def _clean_text(text: str) -> str:
     return html.unescape(str(text or "")).strip()
 
 
+def _parse_source_fields(item: dict) -> tuple[str, str, str]:
+    """Extract source name/type and original URL from Benzinga/Massive payload."""
+    author = _clean_text(item.get("author") or "")
+    channels = item.get("channels") or item.get("channel") or []
+    channel_name = ""
+    if isinstance(channels, list) and channels:
+        first = channels[0]
+        if isinstance(first, dict):
+            channel_name = _clean_text(first.get("name") or first.get("title") or "")
+        elif isinstance(first, str):
+            channel_name = _clean_text(first)
+    source_name = author or channel_name or _clean_text(item.get("source") or "")
+    url = str(item.get("url") or item.get("link") or "").strip()
+    original = str(item.get("original_url") or item.get("source_url") or url).strip()
+    return source_name, "", original or url
+
+
 def parse_benzinga_article(item: dict) -> BenzingaArticle | None:
     article_id = str(item.get("id") or item.get("benzinga_id") or item.get("article_id") or "").strip()
     title = _clean_text(item.get("title") or item.get("headline") or "")
@@ -84,6 +104,7 @@ def parse_benzinga_article(item: dict) -> BenzingaArticle | None:
     body = _clean_text(item.get("body") or item.get("teaser") or item.get("summary") or "")
     url = str(item.get("url") or item.get("link") or "").strip()
     published = str(item.get("created") or item.get("published") or item.get("updated") or "").strip()
+    source_name, source_type, original_url = _parse_source_fields(item)
     return BenzingaArticle(
         article_id=article_id,
         title=title,
@@ -91,6 +112,9 @@ def parse_benzinga_article(item: dict) -> BenzingaArticle | None:
         body=body,
         symbols=_parse_symbols(item),
         published=published,
+        source_name=source_name,
+        source_type=source_type,
+        original_url=original_url,
     )
 
 

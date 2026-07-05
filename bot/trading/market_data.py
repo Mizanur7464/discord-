@@ -257,6 +257,7 @@ class SymbolProfile:
     name: str = ""
     country_flag: str = "🇺🇸"
     sector: str = ""
+    exchange: str = ""
     market_cap_usd: float | None = None
 
 
@@ -296,6 +297,7 @@ def fetch_symbol_profile_sync(symbol: str, finnhub_api_key: str) -> SymbolProfil
         "SG": "🇸🇬",
     }
     sector = str(payload.get("finnhubIndustry") or payload.get("gsector") or "").strip()
+    exchange = str(payload.get("exchange") or "").strip().upper()
     market_cap_usd = None
     mcap = payload.get("marketCapitalization")
     if mcap:
@@ -310,6 +312,7 @@ def fetch_symbol_profile_sync(symbol: str, finnhub_api_key: str) -> SymbolProfil
         name=name,
         country_flag=flags.get(country, "🇺🇸"),
         sector=sector,
+        exchange=exchange,
         market_cap_usd=market_cap_usd,
     )
 

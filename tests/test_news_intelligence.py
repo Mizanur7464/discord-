@@ -74,7 +74,7 @@ def test_resolve_large_cap_skipped():
     assert post_main is False
 
 
-def test_resolve_gray_skipped():
+def test_resolve_gray_skipped_legacy():
     impact = classify_impact("Company reiterates prior guidance in podcast appearance")
     _, _, skip = resolve_news_routing(
         title="update",
@@ -84,8 +84,26 @@ def test_resolve_gray_skipped():
         max_low_cap_usd=3_000_000_000,
         is_crypto=False,
         impact=impact,
+        intelligence_mode=False,
     )
     assert skip is True
+
+
+def test_resolve_gray_intelligence_not_skipped():
+    impact = classify_impact("Company reiterates prior guidance in podcast appearance")
+    post_main, post_cap, skip = resolve_news_routing(
+        title="update",
+        body="",
+        symbols=["ABCD"],
+        smallest_market_cap_usd=50_000_000,
+        max_low_cap_usd=3_000_000_000,
+        is_crypto=False,
+        impact=impact,
+        intelligence_mode=True,
+    )
+    assert skip is False
+    assert post_main is False
+    assert post_cap is False
 
 
 def test_build_trader_context_line():

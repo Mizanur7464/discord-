@@ -20,8 +20,11 @@ news:
   benzinga_poll_interval_seconds: 15   # poll Massive Benzinga news (was 20)
   reader_enabled: true           # serve paywall-free article pages from API cache
   reader_port: 8787
-  news_filter_enabled: true      # skip routine/gray news; route crypto & large-cap out of main feed
+  news_filter_enabled: true      # skip routine/gray news from All News; noise → #noise channel
   crypto_news_exclusive: true   # crypto headlines only in #crypto-news
+  news_intelligence_enabled: true   # SDS §2: impact-level routing (not market-cap news channels)
+  news_timeline_format: true        # SDS §2.1: HH:MM:SS — TICKER Headline layout
+  news_universe_max_market_cap_usd: 3000000000   # coverage scope boundary only (§1.1)
 
   allowed_url_domains:
     - benzinga.com

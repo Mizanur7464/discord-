@@ -138,6 +138,39 @@ class NewsImpact:
     post_cap: bool
     skip_entirely: bool
     reason: str
+    catalyst_type: str = ""
+    catalyst_tags: list[str] | None = None
+    dilution_risk: bool = False
+    matched_keywords: list[str] | None = None
+    confidence: float | None = None
+    urgency: str = ""
+    repeated_pr: bool = False
+    negated: bool = False
+    secondary_events: list[str] | None = None
+
+
+DILUTION_KEYWORDS = (
+    "private placement",
+    "pipe",
+    "public offering",
+    "direct offering",
+    "registered direct",
+    "atm offering",
+    "shelf registration",
+    "s-1 filing",
+    "s-3 filing",
+    "securities purchase agreement",
+    "warrant",
+    "convertible note",
+    "convertible debt",
+    "equity purchase agreement",
+    "sepa",
+    "standby equity purchase",
+    "lincoln park",
+    "yorkville",
+    "committed equity facility",
+    "dilution",
+)
 
 
 @dataclass
@@ -147,9 +180,19 @@ class SymbolNewsContext:
     market_cap_usd: float | None = None
     country_flag: str = "🇺🇸"
     sector: str = ""
+    exchange: str = ""
+    theme: str = ""
     rvol: float | None = None
+    peak_rvol: float | None = None
+    peak_rvol_at: str = ""
+    price: float | None = None
+    session_change_pct: float | None = None
+    session_turnover_usd: float | None = None
+    premarket_turnover_usd: float | None = None
     is_runner: bool = False
     runner_stars: int = 0
+    sentiment: str = ""
+    dilution_risk: bool | None = None
 
 
 def is_options_news(*, title: str = "", body: str = "") -> bool:
@@ -157,45 +200,57 @@ def is_options_news(*, title: str = "", body: str = "") -> bool:
     return any(keyword in text for keyword in OPTIONS_KEYWORDS)
 
 
+def is_dilution_news(text: str) -> bool:
+    """SDS §3.2 financing/dilution keywords."""
+    from bot.news.keyword_scanner import scan_keywords
+
+    return scan_keywords(text).dilution_risk or any(
+        keyword in text.lower() for keyword in DILUTION_KEYWORDS
+    )
+
+
 def classify_impact(
     text: str,
     *,
     category: str = "",
     sentiment: str = "neutral",
+    symbol: str = "",
+    article_id: str = "",
+    source: str = "benzinga",
 ) -> NewsImpact:
-    """Classify trading impact (color = urgency, not bullish/bearish)."""
-    lower = text.lower()
-    category = category or classify_news_text(text, sentiment=sentiment)
+    """Classify via SDS §3 keyword scanner + §4 rule engine."""
+    from bot.news.rule_engine import apply_rule_engine
 
-    if any(keyword in lower for keyword in GRAY_KEYWORDS):
-        level = IMPACT_GRAY
-        reason = "routine / low-value"
-    elif any(keyword in lower for keyword in HIGH_KEYWORDS) or category in HIGH_CATEGORIES:
-        level = IMPACT_HIGH
-        reason = "high-impact catalyst"
-    elif any(keyword in lower for keyword in MEDIUM_KEYWORDS):
-        level = IMPACT_MEDIUM
-        reason = "tradable catalyst"
-    elif any(keyword in lower for keyword in LOW_KEYWORDS) or category == "Ordinary News":
+    rules = apply_rule_engine(text, symbol=symbol, article_id=article_id, source=source)
+    scan = rules.keyword
+    category = category or rules.catalyst_type or classify_news_text(text, sentiment=sentiment)
+    if rules.catalyst_type and rules.catalyst_type not in category:
+        category = rules.catalyst_type
+
+    level = rules.impact_level
+    emoji = rules.impact_emoji
+    reason = rules.reason
+
+    if level not in {IMPACT_HIGH, IMPACT_MEDIUM, IMPACT_LOW, IMPACT_GRAY}:
         level = IMPACT_LOW
-        reason = "watch only"
-    elif category in {"Partnership", "Contract Announcement", "Earnings"}:
-        level = IMPACT_MEDIUM
+        emoji = IMPACT_EMOJI[level]
+
+    if level == IMPACT_MEDIUM and category in {"Partnership", "Contract Announcement", "Earnings"}:
         reason = category.lower()
-    elif sentiment == "bullish":
+    elif level == IMPACT_LOW and category == "Ordinary News":
+        reason = "watch only"
+    elif level == IMPACT_GRAY and category == "No Clear Catalyst":
+        reason = rules.reason or "no clear catalyst"
+    elif sentiment == "bullish" and level == IMPACT_LOW and not rules.negated:
         level = IMPACT_MEDIUM
+        emoji = IMPACT_EMOJI[IMPACT_MEDIUM]
         reason = "bullish signal"
-    elif category == "No Clear Catalyst":
-        level = IMPACT_GRAY
-        reason = "no clear catalyst"
-    else:
-        level = IMPACT_LOW
-        reason = "low impact"
 
-    emoji = IMPACT_EMOJI[level]
     skip_entirely = level == IMPACT_GRAY
     post_main = level in {IMPACT_HIGH, IMPACT_MEDIUM}
     post_cap = level in {IMPACT_HIGH, IMPACT_MEDIUM, IMPACT_LOW}
+    secondary = [f"{e.catalyst_type} ({e.role})" for e in rules.secondary_events[:3]]
+
     return NewsImpact(
         level=level,
         emoji=emoji,
@@ -204,6 +259,27 @@ def classify_impact(
         post_cap=post_cap,
         skip_entirely=skip_entirely,
         reason=reason,
+        catalyst_type=rules.catalyst_type or scan.catalyst_type,
+        catalyst_tags=rules.catalyst_tags or scan.catalyst_tags,
+        dilution_risk=rules.dilution_risk,
+        matched_keywords=rules.matched_keywords or scan.matched_keywords,
+        confidence=rules.confidence,
+        urgency=rules.urgency,
+        repeated_pr=rules.repeated_pr,
+        negated=rules.negated,
+        secondary_events=secondary or None,
+    )
+
+
+def is_out_of_news_universe(
+    smallest_market_cap_usd: float | None,
+    max_universe_cap_usd: float,
+) -> bool:
+    """Coverage scope boundary — not a news classification rule (SDS §1.1)."""
+    return (
+        smallest_market_cap_usd is not None
+        and max_universe_cap_usd > 0
+        and smallest_market_cap_usd >= max_universe_cap_usd
     )
 
 
@@ -217,15 +293,21 @@ def resolve_news_routing(
     is_crypto: bool,
     impact: NewsImpact,
     crypto_exclusive: bool = True,
+    intelligence_mode: bool = False,
 ) -> tuple[bool, bool, bool]:
-    """Return (post_main, post_cap, skip_all)."""
+    """Return (post_main, post_cap, skip_all). Legacy MC-cap routing when intelligence_mode=False."""
     if is_crypto and crypto_exclusive:
         return False, False, False
-    if impact.skip_entirely:
-        return False, False, True
     if is_options_news(title=title, body=body) and not symbols:
         return False, False, True
-    if smallest_market_cap_usd is not None and smallest_market_cap_usd >= max_low_cap_usd:
+    if is_out_of_news_universe(smallest_market_cap_usd, max_low_cap_usd):
+        return False, False, True
+    if intelligence_mode:
+        if impact.level == IMPACT_GRAY:
+            return False, False, False
+        post_main = impact.level in {IMPACT_HIGH, IMPACT_MEDIUM, IMPACT_LOW}
+        return post_main, False, not post_main
+    if impact.skip_entirely:
         return False, False, True
     post_main = impact.post_main
     post_cap = impact.post_cap and (
