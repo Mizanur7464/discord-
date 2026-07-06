@@ -120,6 +120,7 @@ class RuleEngineResult:
     primary_event: DetectedEvent | None = None
     secondary_events: list[DetectedEvent] = field(default_factory=list)
     metadata: dict[str, list[str]] = field(default_factory=dict)
+    canonical_keyword: str = ""
 
 
 class DuplicateDetector:
@@ -374,6 +375,13 @@ def apply_rule_engine(
 
     confidence = _score_confidence(normalized, negated=negated, source=source)
     urgency = _detect_urgency(normalized, level)
+    from bot.news.canonical_keyword import resolve_canonical_keyword
+
+    canonical = resolve_canonical_keyword(
+        text,
+        matched=keyword.matched_keywords,
+        catalyst_type=catalyst,
+    )
 
     return RuleEngineResult(
         keyword=keyword,
@@ -392,4 +400,5 @@ def apply_rule_engine(
         primary_event=primary,
         secondary_events=[e for e in events if e.role != "primary"],
         metadata=keyword.metadata,
+        canonical_keyword=canonical,
     )

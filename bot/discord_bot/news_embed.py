@@ -141,34 +141,47 @@ def build_timeline_news_block(
     dilution_risk: bool | None = None,
     ai_output=None,
     source_trace: SourceTraceability | None = None,
+    related_symbols: list[str] | None = None,
+    news_scope: str = "company",
 ) -> str:
     """SDS §2.1 timeline feed — HH:MM:SS — TICKER Headline, one metadata field per line."""
-    symbol = (symbol or (article.symbols[0] if article.symbols else "")).upper()
-    headline = _headline_for_symbol(article, symbol)
+    from bot.news.news_scope import is_multi_ticker_post
+
+    multi = is_multi_ticker_post(news_scope) and related_symbols and len(related_symbols) > 1
+    symbol = (symbol or "").upper()
+    if not symbol and not multi:
+        symbol = (article.symbols[0] if article.symbols else "").upper()
+    headline = _headline_for_symbol(article, symbol if not multi else "")
     time_et = _format_published_seconds_et(article.published)
-    title_line = f"{time_et} — {symbol} {headline}".strip(" —") if time_et else f"{symbol} {headline}".strip()
+    if multi:
+        title_line = f"{time_et} — {headline}".strip(" —") if time_et else headline
+    else:
+        title_line = f"{time_et} — {symbol} {headline}".strip(" —") if time_et else f"{symbol} {headline}".strip()
 
     lines: list[str] = [title_line[:500]]
+    if multi:
+        lines.append(f"Related: {', '.join(related_symbols[:16])}")
     ctx = context or SymbolNewsContext(symbol=symbol)
-    flag = ctx.country_flag or "🇺🇸"
-    exchange = (ctx.exchange or "").strip()
-    if exchange:
-        lines.append(f"{flag} {exchange}")
-    elif flag:
-        lines.append(flag)
+    if not multi:
+        flag = ctx.country_flag or "🇺🇸"
+        exchange = (ctx.exchange or "").strip()
+        if exchange:
+            lines.append(f"{flag} {exchange}")
+        elif flag:
+            lines.append(flag)
 
-    industry = (ctx.sector or "").strip()
-    if industry:
-        lines.append(f"Ind: {industry[:48]}")
-    theme = (ctx.theme or "").strip()
-    if theme and theme != industry:
-        lines.append(f"Theme: {theme[:48]}")
+        industry = (ctx.sector or "").strip()
+        if industry:
+            lines.append(f"Ind: {industry[:48]}")
+        theme = (ctx.theme or "").strip()
+        if theme and theme != industry:
+            lines.append(f"Theme: {theme[:48]}")
 
     mcap = _fmt_mcap_display(ctx.market_cap_usd)
-    if mcap:
+    if mcap and not multi:
         lines.append(f"MC: {mcap.lstrip('$')}")
     flt = _fmt_float_display(ctx.float_shares)
-    if flt:
+    if flt and not multi:
         lines.append(f"F: {flt}")
 
     impact_label = IMPACT_LEVEL_LABELS.get(impact.level, impact.level.title())
@@ -201,31 +214,32 @@ def build_timeline_news_block(
         lines.append("Repeated PR: Yes")
 
     px = _fmt_price_display(ctx.price)
-    if px:
+    if px and not multi:
         lines.append(f"Px: {px.lstrip('$')}")
 
     session_to = _fmt_turnover_display(
         getattr(ctx, "session_turnover_usd", None) or ctx.premarket_turnover_usd
     )
-    if session_to:
+    if session_to and not multi:
         lines.append(f"Session TO: {session_to.lstrip('$')}")
 
-    if ctx.rvol is not None and ctx.rvol > 0:
+    if not multi and ctx.rvol is not None and ctx.rvol > 0:
         rvol_text = f"{ctx.rvol:,.0f}x" if ctx.rvol >= 100 else f"{ctx.rvol:g}x"
         lines.append(f"RVOL@News: {rvol_text}")
 
     peak = _fmt_peak_rvol_display(ctx.peak_rvol, ctx.peak_rvol_at)
-    if peak:
+    if peak and not multi:
         lines.append(f"Peak RVOL: {peak}")
 
     day_chg = _fmt_pct_display(ctx.session_change_pct)
-    if day_chg:
+    if day_chg and not multi:
         lines.append(f"1D: {day_chg}")
 
-    if ctx.is_runner:
-        lines.append("Prev Run: Yes")
-    elif ctx.symbol:
-        lines.append("Prev Run: No")
+    if not multi:
+        if ctx.is_runner:
+            lines.append("Prev Run: Yes")
+        elif ctx.symbol:
+            lines.append("Prev Run: No")
 
     dilution = dilution_risk if dilution_risk is not None else ctx.dilution_risk
     if dilution is not None:
@@ -236,8 +250,14 @@ def build_timeline_news_block(
             lines.append(f"Summary: {ai_output.summary[:220]}")
         if ai_output.liquidity_risk:
             lines.append(f"Liq Risk: {ai_output.liquidity_risk}")
-        if ai_output.keyword and ai_output.keyword != "—":
-            lines.append(f"Keyword: {ai_output.keyword[:64]}")
+    keyword = ""
+    if ai_output is not None and ai_output.keyword and ai_output.keyword != "—":
+        keyword = ai_output.keyword
+    elif getattr(impact, "canonical_keyword", "") and impact.canonical_keyword != "—":
+        keyword = impact.canonical_keyword
+    if keyword:
+        lines.append(f"Keyword: {keyword[:64]}")
+    if ai_output is not None:
         if ai_output.crowd_attention_score:
             lines.append(f"Crowd: {ai_output.crowd_attention_score}/100")
         if ai_output.smart_alert:
@@ -281,11 +301,33 @@ def build_timeline_news_blocks(
     dilution_risk: bool | None = None,
     ai_outputs: dict[str, object] | None = None,
     source_trace=None,
+    news_scope: str = "company",
     **kwargs,
 ) -> list[str]:
-    """One Discord message per ticker — timeline layout."""
+    """One Discord message per ticker — or single post for macro/sector scope."""
+    from bot.news.news_scope import is_multi_ticker_post
+
     contexts = contexts or {}
     if symbol_rows:
+        tickers = [sym.upper() for sym, _, _ in symbol_rows if sym]
+        if is_multi_ticker_post(news_scope) and len(tickers) > 1:
+            primary = tickers[0]
+            ctx = contexts.get(primary) or SymbolNewsContext(symbol=primary)
+            first_ai = (ai_outputs or {}).get(primary) or next(iter((ai_outputs or {}).values()), None)
+            block = build_timeline_news_block(
+                article,
+                symbol="",
+                impact=impact,
+                context=ctx,
+                reader_base_url=reader_base_url,
+                sentiment=sentiment,
+                dilution_risk=dilution_risk,
+                ai_output=first_ai,
+                source_trace=source_trace,
+                related_symbols=tickers,
+                news_scope=news_scope,
+            )
+            return [block] if block else []
         blocks: list[str] = []
         for symbol, _float_shares, _country_flag in symbol_rows:
             sym = symbol.upper()

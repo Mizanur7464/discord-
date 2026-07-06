@@ -147,6 +147,7 @@ class NewsImpact:
     repeated_pr: bool = False
     negated: bool = False
     secondary_events: list[str] | None = None
+    canonical_keyword: str = ""
 
 
 DILUTION_KEYWORDS = (
@@ -250,6 +251,13 @@ def classify_impact(
     post_main = level in {IMPACT_HIGH, IMPACT_MEDIUM}
     post_cap = level in {IMPACT_HIGH, IMPACT_MEDIUM, IMPACT_LOW}
     secondary = [f"{e.catalyst_type} ({e.role})" for e in rules.secondary_events[:3]]
+    from bot.news.canonical_keyword import resolve_canonical_keyword
+
+    canonical = resolve_canonical_keyword(
+        text,
+        matched=rules.matched_keywords or scan.matched_keywords,
+        catalyst_type=rules.catalyst_type or scan.catalyst_type,
+    )
 
     return NewsImpact(
         level=level,
@@ -268,6 +276,7 @@ def classify_impact(
         repeated_pr=rules.repeated_pr,
         negated=rules.negated,
         secondary_events=secondary or None,
+        canonical_keyword=canonical,
     )
 
 

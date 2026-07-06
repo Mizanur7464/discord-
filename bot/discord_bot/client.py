@@ -621,6 +621,7 @@ class NewsTradingBot(commands.Bot):
         from bot.news.smart_alert import evaluate_smart_alert
         from bot.news.source_traceability import build_source_traceability
         from bot.news.timeline_evolution import record_timeline_event
+        from bot.news.news_scope import classify_news_scope, is_multi_ticker_post
         from datetime import datetime, timezone
 
         if not isinstance(article, BenzingaArticle):
@@ -637,6 +638,11 @@ class NewsTradingBot(commands.Bot):
             return
 
         symbols = article.symbols or [""]
+        news_scope = classify_news_scope(
+            title=article.title,
+            body=article.body or "",
+            symbols=[s for s in symbols if s],
+        )
         news_cfg = self.settings.news
         filter_enabled = getattr(news_cfg, "news_filter_enabled", True)
         crypto_exclusive = getattr(news_cfg, "crypto_news_exclusive", True)
@@ -680,7 +686,11 @@ class NewsTradingBot(commands.Bot):
             impact_keys, skip_all = resolve_impact_post_targets(
                 impact,
                 news_filter_enabled=filter_enabled,
-                out_of_universe=is_out_of_news_universe(smallest_mcap, max_universe),
+                out_of_universe=(
+                    False
+                    if is_multi_ticker_post(news_scope)
+                    else is_out_of_news_universe(smallest_mcap, max_universe)
+                ),
                 is_options_without_symbol=is_options_news(
                     title=article.title, body=article.body or ""
                 )
@@ -726,38 +736,71 @@ class NewsTradingBot(commands.Bot):
         ai_outputs: dict[str, _NewsAIOutput] = {}
         primary_sym = symbols[0].upper() if symbols and symbols[0] else ""
         if intelligence and timeline:
-            for sym, ctx in contexts.items():
-                base = ai_output
-                if base is None:
-                    continue
-                if sym != primary_sym and len(symbols) > 1:
-                    continue
+            macro_post = is_multi_ticker_post(news_scope) and len([s for s in symbols if s]) > 1
+            if macro_post and primary_sym:
+                ctx = contexts.get(primary_sym)
                 crowd = compute_crowd_attention_score(
                     impact_level=impact.level,
                     context=ctx,
                     repeated_pr=bool(getattr(impact, "repeated_pr", False)),
                 )
-                timeline_label = f"{impact.emoji} {impact.category or impact.catalyst_type or 'News'}"
-                timeline_note = record_timeline_event(sym, timeline_label)
-                smart = evaluate_smart_alert(impact, ctx, crowd_score=crowd, repeated_pr=impact.repeated_pr)
-                ai_outputs[sym] = _NewsAIOutput(
-                    impact_level=base.impact_level,
-                    impact_emoji=base.impact_emoji,
-                    sentiment=base.sentiment,
-                    confidence=base.confidence,
-                    dilution_risk=base.dilution_risk,
-                    liquidity_risk=base.liquidity_risk,
-                    category=base.category,
-                    keyword=base.keyword,
-                    summary=base.summary,
-                    suggested_action=base.suggested_action,
-                    catalyst_type=base.catalyst_type,
-                    catalyst_tags=base.catalyst_tags,
-                    crowd_attention_score=crowd,
-                    smart_alert=smart,
-                    timeline_note=timeline_note,
+                timeline_note = record_timeline_event(
+                    primary_sym,
+                    f"{impact.emoji} {impact.category or impact.catalyst_type or 'News'}",
                 )
-            if ai_output and primary_sym and primary_sym not in ai_outputs:
+                smart = evaluate_smart_alert(impact, ctx, crowd_score=crowd, repeated_pr=impact.repeated_pr)
+                base = ai_output
+                if base is not None:
+                    ai_outputs[primary_sym] = _NewsAIOutput(
+                        impact_level=base.impact_level,
+                        impact_emoji=base.impact_emoji,
+                        sentiment=base.sentiment,
+                        confidence=base.confidence,
+                        dilution_risk=base.dilution_risk,
+                        liquidity_risk=base.liquidity_risk,
+                        category=base.category,
+                        keyword=base.keyword,
+                        summary=base.summary,
+                        suggested_action=base.suggested_action,
+                        catalyst_type=base.catalyst_type,
+                        catalyst_tags=base.catalyst_tags,
+                        crowd_attention_score=crowd,
+                        smart_alert=smart,
+                        timeline_note=timeline_note,
+                    )
+            elif not macro_post:
+                for sym, ctx in contexts.items():
+                    base = ai_output
+                    if base is None:
+                        continue
+                    if sym != primary_sym and len(symbols) > 1:
+                        continue
+                    crowd = compute_crowd_attention_score(
+                        impact_level=impact.level,
+                        context=ctx,
+                        repeated_pr=bool(getattr(impact, "repeated_pr", False)),
+                    )
+                    timeline_label = f"{impact.emoji} {impact.category or impact.catalyst_type or 'News'}"
+                    timeline_note = record_timeline_event(sym, timeline_label)
+                    smart = evaluate_smart_alert(impact, ctx, crowd_score=crowd, repeated_pr=impact.repeated_pr)
+                    ai_outputs[sym] = _NewsAIOutput(
+                        impact_level=base.impact_level,
+                        impact_emoji=base.impact_emoji,
+                        sentiment=base.sentiment,
+                        confidence=base.confidence,
+                        dilution_risk=base.dilution_risk,
+                        liquidity_risk=base.liquidity_risk,
+                        category=base.category,
+                        keyword=base.keyword,
+                        summary=base.summary,
+                        suggested_action=base.suggested_action,
+                        catalyst_type=base.catalyst_type,
+                        catalyst_tags=base.catalyst_tags,
+                        crowd_attention_score=crowd,
+                        smart_alert=smart,
+                        timeline_note=timeline_note,
+                    )
+            if ai_output and primary_sym and primary_sym not in ai_outputs and not macro_post:
                 ctx = contexts.get(primary_sym)
                 crowd = compute_crowd_attention_score(
                     impact_level=impact.level,
@@ -796,6 +839,7 @@ class NewsTradingBot(commands.Bot):
                 dilution_risk=dilution_risk,
                 ai_outputs=ai_outputs or None,
                 source_trace=source_trace,
+                news_scope=news_scope,
             )
         else:
             context_lines = {

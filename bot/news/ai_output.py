@@ -65,7 +65,9 @@ def build_ai_output_from_rules(
     """Fallback §6 envelope from keyword/rule engine when OpenAI unavailable."""
     sent_map = {"bullish": "Bullish", "ignored": "Bearish", "bearish": "Bearish", "neutral": "Neutral"}
     sent = sent_map.get((sentiment or "neutral").lower(), "Neutral")
-    keyword = (impact.matched_keywords or [""])[0] if impact.matched_keywords else impact.catalyst_type
+    keyword = (impact.canonical_keyword or "").strip()
+    if not keyword or keyword == "—":
+        keyword = (impact.matched_keywords or [""])[0] if impact.matched_keywords else impact.catalyst_type
     summary = ai_reason or impact.reason or impact.category or "No clear catalyst"
     return NewsAIOutput(
         impact_level=impact.level,
@@ -154,7 +156,9 @@ async def classify_news_ai_output(
         dilution_risk=bool(impact.dilution_risk),
         liquidity_risk=liquidity,
         category=impact.category or impact.catalyst_type or "News",
-        keyword=str(parsed.get("keyword", "")).strip() or (impact.matched_keywords or ["—"])[0],
+        keyword=(impact.canonical_keyword or "").strip()
+        or str(parsed.get("keyword", "")).strip()
+        or (impact.matched_keywords or ["—"])[0],
         summary=str(parsed.get("summary", "")).strip()[:220],
         suggested_action=str(parsed.get("suggested_action", "")).strip()[:180]
         or _actionability_label(impact),
