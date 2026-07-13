@@ -388,8 +388,10 @@ class NewsTradingBot(commands.Bot):
         self._background_tasks.append(asyncio.create_task(self._exit_monitor_loop()))
         if self.realtime_scanner:
             self._background_tasks.append(asyncio.create_task(self.realtime_scanner.run_loop()))
-        if self._summary_channel:
+        if self._summary_channel and self.settings.trading.summary_enabled:
             self._background_tasks.append(asyncio.create_task(self._summary_loop()))
+        elif self._summary_channel and not self.settings.trading.summary_enabled:
+            logger.info("Summary publisher disabled (Project 1 — Nuntio owns #top-gainers).")
         if self.benzinga_feed:
             self._background_tasks.append(asyncio.create_task(self._benzinga_feed_loop()))
         if self.news_reader_server:

@@ -142,6 +142,7 @@ class TradingConfig:
     summary_interval_seconds: int = 60
     summary_live_tick_seconds: int = 5
     summary_top_gainers_limit: int = 15
+    summary_enabled: bool = True
     potential_enabled: bool = True
     potential_min_score: int = 45
     potential_min_session_change_pct: float = 2.0
@@ -497,6 +498,7 @@ def load_settings() -> Settings:
             summary_interval_seconds=int(trading_raw.get("summary_interval_seconds", 60)),
             summary_live_tick_seconds=int(trading_raw.get("summary_live_tick_seconds", 30)),
             summary_top_gainers_limit=int(trading_raw.get("summary_top_gainers_limit", 15)),
+            summary_enabled=bool(trading_raw.get("summary_enabled", True)),
             potential_enabled=trading_raw.get("potential_enabled", True),
             potential_min_score=int(trading_raw.get("potential_min_score", 45)),
             potential_min_session_change_pct=float(

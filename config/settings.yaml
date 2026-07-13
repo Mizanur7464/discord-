@@ -16,13 +16,13 @@ news:
   trusted_news_bots: []          # no external news bots — Massive Benzinga API is the only source
   ai_sentiment_enabled: true    # all buy/ignore/neutral signals decided by OpenAI
   openai_model: gpt-4o-mini
-  benzinga_feed_enabled: true   # licensed news from Benzinga API (replaces NB news)
+  benzinga_feed_enabled: false  # Project 1: Nuntio Bot provides #news — re-enable for AI News layer
   benzinga_poll_interval_seconds: 15   # poll Massive Benzinga news (was 20)
-  reader_enabled: true           # serve paywall-free article pages from API cache
+  reader_enabled: false          # Project 1: off until AI News Analysis layer returns
   reader_port: 8787
   news_filter_enabled: true      # skip routine/gray news from All News; noise → #noise channel
   crypto_news_exclusive: true   # crypto headlines only in #crypto-news
-  news_intelligence_enabled: true   # SDS §2: impact-level routing (not market-cap news channels)
+  news_intelligence_enabled: false  # Project 1: single #news channel only (Nuntio foundation)
   news_timeline_format: true        # SDS §2.1: HH:MM:SS — TICKER Headline layout
   news_universe_max_market_cap_usd: 3000000000   # coverage scope boundary only (§1.1)
 
@@ -57,7 +57,7 @@ trading:
   mosquito_volume_min_value: 1000000      # min labeled mosquito volume value to count as confirmation
   mosquito_min_relative_volume: 2.0       # RVol confirmation from mosquito card
   mosquito_volume_confirm_minutes: 60     # volume confirmation stays valid for this many minutes
-  mosquito_alerts_enabled: true           # post own scanner rows to #mosquito
+  mosquito_alerts_enabled: false          # Project 1: Nuntio Bot provides #mosquito
   mosquito_alert_cooldown_seconds: 600   # per-symbol mosquito cooldown (10 min)
   mosquito_max_alerts_per_batch: 3       # top movers only each scan cycle
   mosquito_automute_window_seconds: 90   # SPM-style auto-mute rolling window
@@ -166,7 +166,8 @@ trading:
   summary_interval_seconds: 60         # refresh top-gainer data
   summary_live_tick_seconds: 5         # edit footer for live "Updated" clock
   summary_top_gainers_limit: 15        # SPM/NB style top movers only
-  potential_enabled: true             # pre-gainer potential channel
+  summary_enabled: false              # Project 1: Nuntio Bot owns #top-gainers
+  potential_enabled: false            # Project 1: no #potential channel
   potential_min_score: 45
   potential_min_session_change_pct: 2
   potential_max_session_change_pct: 25  # skip names already extended
@@ -179,5 +180,5 @@ trading:
   tradingview_interval: 5m
 
 forwarder:
-  enabled: false   # NuntioBot forward off — use Benzinga feed
+  enabled: false   # Project 1: Nuntio Bot is the feed foundation
   require_news_url: false
