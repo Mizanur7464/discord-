@@ -209,6 +209,8 @@ class Settings:
     benzinga_news_provider: str = "massive"
     finnhub_api_key: str = ""
     unusual_whales_api_key: str = ""
+    good_news_channel_id: int = 0
+    bad_news_channel_id: int = 0
 
 
 def _resolve_reader_base_url(port: int) -> str:
@@ -296,6 +298,8 @@ def load_settings() -> Settings:
     news_600m_channel = os.getenv("NEWS_600M_CHANNEL_ID", "").strip()
     crypto_news_channel = os.getenv("CRYPTO_NEWS_CHANNEL_ID", "").strip()
     world_news_channel = os.getenv("WORLD_NEWS_CHANNEL_ID", "").strip()
+    good_news_channel = os.getenv("GOOD_NEWS_CHANNEL_ID", "").strip()
+    bad_news_channel = os.getenv("BAD_NEWS_CHANNEL_ID", "").strip()
     user_token = os.getenv("DISCORD_USER_TOKEN", "").strip()
     user_email = os.getenv("DISCORD_USER_EMAIL", "").strip()
     user_password = os.getenv("DISCORD_USER_PASSWORD", "").strip()
@@ -556,4 +560,6 @@ def load_settings() -> Settings:
         benzinga_news_provider=benzinga_news_provider,
         finnhub_api_key=os.getenv("FINNHUB_API_KEY", "").strip(),
         unusual_whales_api_key=os.getenv("UNUSUAL_WHALES_API_KEY", "").strip(),
+        good_news_channel_id=int(good_news_channel) if good_news_channel else 0,
+        bad_news_channel_id=int(bad_news_channel) if bad_news_channel else 0,
     )

@@ -182,6 +182,8 @@ class NewsTradingBot(commands.Bot):
         self._news_600m_channel: discord.TextChannel | None = None
         self._crypto_news_channel: discord.TextChannel | None = None
         self._world_news_channel: discord.TextChannel | None = None
+        self._good_news_channel: discord.TextChannel | None = None
+        self._bad_news_channel: discord.TextChannel | None = None
         self._mosquito_recent: dict[str, float] = {}
         self._watchlist_recent: dict[str, float] = {}
         self._potential_recent: dict[str, float] = {}
@@ -326,6 +328,8 @@ class NewsTradingBot(commands.Bot):
             ("news_600m_channel_id", "_news_600m_channel", "NEWS_600M_CHANNEL_ID"),
             ("crypto_news_channel_id", "_crypto_news_channel", "CRYPTO_NEWS_CHANNEL_ID"),
             ("world_news_channel_id", "_world_news_channel", "WORLD_NEWS_CHANNEL_ID"),
+            ("good_news_channel_id", "_good_news_channel", "GOOD_NEWS_CHANNEL_ID"),
+            ("bad_news_channel_id", "_bad_news_channel", "BAD_NEWS_CHANNEL_ID"),
         ]
         for setting_attr, channel_attr, env_name in mc_channel_map:
             channel_id = getattr(self.settings, setting_attr)
@@ -1964,8 +1968,11 @@ class NewsTradingBot(commands.Bot):
             timing_key = url or dedupe_key
             mark_news_if_absent(timing_key)
             mark_step(timing_key, "received")
+            ai_sentiment = item.sentiment
+            ai_reason = item.ai_reason
             trade_msg = await self._process_item(item, timing_key=timing_key)
             await self.send_news_alert(item, trade_msg)
+            await self._route_good_bad_news(item, sentiment=ai_sentiment, ai_reason=ai_reason)
             processed += 1
             logger.info(
                 "Processed message %s — %s %s (%s)",
@@ -2098,6 +2105,53 @@ class NewsTradingBot(commands.Bot):
             "manual confirm",
         )
         return not any(token in low for token in skip_tokens)
+
+    async def _route_good_bad_news(
+        self,
+        item: NewsItem,
+        *,
+        sentiment: str = "",
+        ai_reason: str = "",
+    ) -> None:
+        """Post AI-filtered NB news into #good-news / #bad-news (VIP layer)."""
+        sentiment = (sentiment or item.sentiment or "").lower()
+        if sentiment == "bullish":
+            channel = self._good_news_channel
+            emoji = "🟢"
+            color = discord.Color.green()
+            label = "Good News"
+        elif sentiment == "ignored":
+            channel = self._bad_news_channel
+            emoji = "🔴"
+            color = discord.Color.red()
+            label = "Bad News"
+        else:
+            return
+
+        if not channel:
+            return
+
+        reason = (ai_reason or item.ai_reason or "").removeprefix("AI: ").strip()
+        symbol = item.stock_symbol or "?"
+
+        embed = discord.Embed(
+            title=f"{emoji} {symbol} — {label}",
+            description=item.title[:4096],
+            color=color,
+            url=item.link or None,
+        )
+        if item.news_category and item.news_category != "No Clear Catalyst":
+            embed.add_field(name="Catalyst", value=item.news_category, inline=True)
+        if reason:
+            embed.add_field(name="AI Analysis", value=reason[:1024], inline=False)
+        embed.set_footer(text=f"{self.settings.bot.name} · AI news filter")
+
+        try:
+            await channel.send(embed=embed)
+        except discord.Forbidden:
+            logger.warning("Missing permission to post in #%s", channel.name)
+        except Exception as exc:
+            logger.warning("Good/bad news post failed for %s: %s", symbol, exc)
 
     async def send_news_alert(self, item: NewsItem, trade_msg: str | None = None) -> None:
         if not self._alert_channel:
