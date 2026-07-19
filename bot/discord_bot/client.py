@@ -36,7 +36,7 @@ from bot.discord_bot.news_embed import (
     build_benzinga_news_blocks,
     build_timeline_news_blocks,
 )
-from bot.discord_bot.translator import translate_to_english
+from bot.discord_bot.translator import translate_message
 from bot.news.impact_routing import resolve_impact_post_targets
 from bot.news.ai_output import NewsAIOutput
 from bot.news.news_intelligence import (
@@ -1572,7 +1572,7 @@ class NewsTradingBot(commands.Bot):
         if not text:
             return
 
-        translation = await translate_to_english(
+        translation = await translate_message(
             text,
             api_key=self.settings.news.openai_api_key,
             model=self.settings.news.openai_model,
