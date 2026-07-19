@@ -37,6 +37,7 @@ from bot.discord_bot.news_embed import (
     build_timeline_news_blocks,
 )
 from bot.discord_bot.translator import translate_message
+from bot.discord_bot.translator_prefs import TranslatorPrefs
 from bot.news.impact_routing import resolve_impact_post_targets
 from bot.news.ai_output import NewsAIOutput
 from bot.news.news_intelligence import (
@@ -205,6 +206,7 @@ class NewsTradingBot(commands.Bot):
         self._watchlist_mute_notice_at: float = 0.0
         self._scan_detail_cache: dict[str, tuple[ScanResult, int]] = {}
         self._processed_messages: set[str] = set()
+        self.translator_prefs = TranslatorPrefs()
 
     def _is_news_author(self, message: discord.Message) -> bool:
         """Allow human posts and trusted news bots (e.g. NuntioBot) in news channels."""
@@ -1572,6 +1574,14 @@ class NewsTradingBot(commands.Bot):
         if not text:
             return
 
+        recipients = [
+            uid
+            for uid in self.translator_prefs.enabled_user_ids()
+            if uid != message.author.id
+        ]
+        if not recipients:
+            return
+
         translation = await translate_message(
             text,
             api_key=self.settings.news.openai_api_key,
@@ -1580,12 +1590,18 @@ class NewsTradingBot(commands.Bot):
         if not translation:
             return
 
-        try:
-            await message.reply(translation, mention_author=False)
-        except discord.Forbidden:
-            logger.warning("Translator: missing permission in #%s", getattr(message.channel, "name", "?"))
-        except Exception as exc:
-            logger.warning("Translator reply failed: %s", exc)
+        channel_name = getattr(message.channel, "name", "chat")
+        author = message.author.display_name
+        body = f"**#{channel_name}** · {author}\n{translation}\n{message.jump_url}"
+
+        for user_id in recipients:
+            try:
+                user = self.get_user(user_id) or await self.fetch_user(user_id)
+                await user.send(body)
+            except discord.Forbidden:
+                logger.info("Translator: cannot DM user %s (DMs closed)", user_id)
+            except Exception as exc:
+                logger.warning("Translator DM failed for %s: %s", user_id, exc)
 
     def _collect_message_text(self, message: discord.Message) -> str:
         parts = [message.content]
@@ -2274,6 +2290,7 @@ class BotCommands(commands.Cog):
         )
         commands_list = [
             ("/help", "Show this help message"),
+            ("/translate on|off", "Turn private auto-translate on or off"),
             ("/news <url>", "Fetch a news link and run scanner"),
             ("/scan <symbol>", "Run scanner on a symbol"),
             ("/marketscan", "Run realtime + universe scanner once"),
@@ -2293,6 +2310,36 @@ class BotCommands(commands.Cog):
 
         embed.set_footer(text=f"{self.bot.settings.bot.name} · /help for commands")
         await interaction.response.send_message(embed=embed)
+
+    @discord.app_commands.command(
+        name="translate",
+        description="Turn auto-translate on or off (private DM only)",
+    )
+    @discord.app_commands.describe(mode="on = get translations in DM, off = stop")
+    @discord.app_commands.choices(
+        mode=[
+            discord.app_commands.Choice(name="on", value="on"),
+            discord.app_commands.Choice(name="off", value="off"),
+        ]
+    )
+    async def translate_cmd(
+        self,
+        interaction: discord.Interaction,
+        mode: discord.app_commands.Choice[str],
+    ) -> None:
+        enabled = mode.value == "on"
+        self.bot.translator_prefs.set_enabled(interaction.user.id, enabled)
+        if enabled:
+            await interaction.response.send_message(
+                "Translator **on** — you’ll get private DMs for translations. "
+                "Allow DMs from server members. Use `/translate off` anytime.",
+                ephemeral=True,
+            )
+        else:
+            await interaction.response.send_message(
+                "Translator **off** — you won’t get translation messages.",
+                ephemeral=True,
+            )
 
     @discord.app_commands.command(name="status", description="Show bot status")
     async def status_cmd(self, interaction: discord.Interaction) -> None:
