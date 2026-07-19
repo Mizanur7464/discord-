@@ -162,6 +162,7 @@ class BotConfig:
     name: str = DEFAULT_BOT_NAME
     auto_start: bool = True
     alerts_enabled: bool = False
+    translator_enabled: bool = True
 
 
 @dataclass
@@ -330,6 +331,14 @@ def load_settings() -> Settings:
     else:
         alerts_enabled = bool(bot_raw.get("alerts_enabled", False))
 
+    translator_enabled_env = os.getenv("TRANSLATOR_ENABLED", "").strip().lower()
+    if translator_enabled_env in {"1", "true", "yes", "on"}:
+        translator_enabled = True
+    elif translator_enabled_env in {"0", "false", "no", "off"}:
+        translator_enabled = False
+    else:
+        translator_enabled = bool(bot_raw.get("translator_enabled", True))
+
     if alerts_enabled and not alert_channel:
         raise ValueError(
             "ALERT_CHANNEL_ID not found. Add the alert output channel ID in .env."
@@ -361,6 +370,7 @@ def load_settings() -> Settings:
             name=bot_name or DEFAULT_BOT_NAME,
             auto_start=raw["bot"].get("auto_start", True),
             alerts_enabled=alerts_enabled,
+            translator_enabled=translator_enabled,
         ),
         news=NewsConfig(
             source_channel_ids=_parse_channel_ids(source_channels),

@@ -8,6 +8,7 @@ bot:
   name: "Quantiqo"
   auto_start: true
   alerts_enabled: false         # buyer paused #alerts — set true when channel reopens
+  translator_enabled: true      # auto EN translate for chat (excludes Nuntio channels)
 
 news:
   alert_all_news: true          # post every forwarded news to #alerts (including neutral)

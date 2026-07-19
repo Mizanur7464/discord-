@@ -36,6 +36,7 @@ from bot.discord_bot.news_embed import (
     build_benzinga_news_blocks,
     build_timeline_news_blocks,
 )
+from bot.discord_bot.translator import translate_to_english
 from bot.news.impact_routing import resolve_impact_post_targets
 from bot.news.ai_output import NewsAIOutput
 from bot.news.news_intelligence import (
@@ -1511,6 +1512,12 @@ class NewsTradingBot(commands.Bot):
         await self._send_scan_alert(scan, title_prefix="Realtime Scanner")
 
     async def on_message(self, message: discord.Message) -> None:
+        if self.user and message.author.id == self.user.id:
+            return
+
+        if message.guild and not message.author.bot:
+            await self._maybe_translate_message(message)
+
         if not self._is_news_author(message):
             return
 
@@ -1542,6 +1549,43 @@ class NewsTradingBot(commands.Bot):
             self._processed_messages.add(str(message.id))
         if len(self._processed_messages) > 2000:
             self._processed_messages = set(list(self._processed_messages)[-1000:])
+
+    def _translator_excluded_channel_ids(self) -> set[int]:
+        """Nuntio feed channels — do not translate bot news spam."""
+        ids = {
+            self.settings.news_channel_id,
+            self.settings.news_all_channel_id,
+            self.settings.summary_channel_id,
+            self.settings.mosquito_channel_id,
+            *self.settings.news.source_channel_ids,
+        }
+        return {cid for cid in ids if cid}
+
+    async def _maybe_translate_message(self, message: discord.Message) -> None:
+        if not self.settings.bot.translator_enabled:
+            return
+        if not self.settings.news.openai_api_key:
+            return
+        if message.channel.id in self._translator_excluded_channel_ids():
+            return
+        text = (message.content or "").strip()
+        if not text:
+            return
+
+        translation = await translate_to_english(
+            text,
+            api_key=self.settings.news.openai_api_key,
+            model=self.settings.news.openai_model,
+        )
+        if not translation:
+            return
+
+        try:
+            await message.reply(translation, mention_author=False)
+        except discord.Forbidden:
+            logger.warning("Translator: missing permission in #%s", getattr(message.channel, "name", "?"))
+        except Exception as exc:
+            logger.warning("Translator reply failed: %s", exc)
 
     def _collect_message_text(self, message: discord.Message) -> str:
         parts = [message.content]
