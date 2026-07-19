@@ -52,11 +52,17 @@ def looks_chinese(text: str) -> bool:
 
 
 def looks_english(text: str) -> bool:
-    """Latin English chat (skip tiny filler)."""
+    """Latin English chat (skip tiny filler like hi/ok)."""
     if _CJK.search(text) or _HIRAGANA_KATAKANA.search(text) or _HANGUL.search(text):
         return False
     letters = _LATIN_LETTERS.findall(text)
-    return len(letters) >= 8
+    if len(letters) < 4:
+        return False
+    # Skip ultra-common fillers
+    cleaned = text.strip().lower()
+    if cleaned in {"ok", "okay", "yes", "no", "hi", "hey", "lol", "lmao", "wow", "hmm", "nah", "yep", "tho"}:
+        return False
+    return True
 
 
 def looks_non_english(text: str) -> bool:

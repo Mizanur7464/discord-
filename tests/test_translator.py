@@ -46,3 +46,9 @@ def test_url_only_skipped():
 def test_short_english_skipped():
     assert detect_direction("ok") is None
     assert detect_direction("hi") is None
+
+
+def test_short_english_words_translate():
+    assert detect_direction("test") == DIR_EN_TO_ZH
+    assert detect_direction("tell") == DIR_EN_TO_ZH
+    assert detect_direction("testing") == DIR_EN_TO_ZH
