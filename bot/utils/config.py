@@ -163,6 +163,7 @@ class BotConfig:
     auto_start: bool = True
     alerts_enabled: bool = False
     translator_enabled: bool = True
+    translator_channel_ids: list[int] | None = None  # empty = all chat channels (except NB)
 
 
 @dataclass
@@ -301,6 +302,7 @@ def load_settings() -> Settings:
     world_news_channel = os.getenv("WORLD_NEWS_CHANNEL_ID", "").strip()
     good_news_channel = os.getenv("GOOD_NEWS_CHANNEL_ID", "").strip()
     bad_news_channel = os.getenv("BAD_NEWS_CHANNEL_ID", "").strip()
+    translator_channels = os.getenv("TRANSLATOR_CHANNEL_IDS", "").strip()
     user_token = os.getenv("DISCORD_USER_TOKEN", "").strip()
     user_email = os.getenv("DISCORD_USER_EMAIL", "").strip()
     user_password = os.getenv("DISCORD_USER_PASSWORD", "").strip()
@@ -371,6 +373,7 @@ def load_settings() -> Settings:
             auto_start=raw["bot"].get("auto_start", True),
             alerts_enabled=alerts_enabled,
             translator_enabled=translator_enabled,
+            translator_channel_ids=_parse_channel_ids(translator_channels) or None,
         ),
         news=NewsConfig(
             source_channel_ids=_parse_channel_ids(source_channels),
