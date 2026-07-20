@@ -5,10 +5,12 @@ How to run:
   1. pip install -r requirements.txt
   2. Copy .env.example to .env and add your token + channel IDs
   3. python run.py
+     (starts QuantiqoX + QuantiqoX Translator together when TRANSLATOR_BOT_TOKEN is set)
 """
 
 import asyncio
 import logging
+import os
 import sys
 
 
@@ -34,6 +36,42 @@ _fix_windows_dns()
 from bot.discord_bot.client import run_bot
 from bot.forwarder.client import SessionForwarder
 from bot.utils.config import load_settings
+
+
+async def _run_all(settings, forwarder) -> None:
+    tasks = [asyncio.create_task(run_bot(settings, forwarder), name="quantiquox")]
+
+    translator_token = os.getenv("TRANSLATOR_BOT_TOKEN", "").strip()
+    if translator_token:
+        from bot.translator_bot.client import TranslatorBot, load_translator_env
+
+        cfg = load_translator_env()
+        translator = TranslatorBot(
+            openai_api_key=cfg["openai_api_key"],
+            openai_model=cfg["openai_model"],
+            channel_ids=cfg["channel_ids"],
+            excluded_ids=cfg["excluded_ids"],
+            bot_name=cfg["bot_name"],
+        )
+
+        async def _run_translator() -> None:
+            async with translator:
+                await translator.start(cfg["token"])
+
+        tasks.append(asyncio.create_task(_run_translator(), name="translator"))
+        print(f"   Translator: {cfg['bot_name']} (CN → EN)")
+        if cfg["channel_ids"]:
+            print(f"   Translator channels: {cfg['channel_ids']}")
+    else:
+        print("   Translator: off (no TRANSLATOR_BOT_TOKEN)")
+
+    done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_EXCEPTION)
+    for task in pending:
+        task.cancel()
+    for task in done:
+        exc = task.exception()
+        if exc:
+            raise exc
 
 
 def main() -> None:
@@ -68,15 +106,15 @@ def main() -> None:
             print(f"   Forward to: {settings.forwarder.dest_channel_id}")
     if settings.news.reader_enabled:
         print(f"   News reader: {settings.bot.name} (port {settings.news.reader_port})")
-    print("   Press Ctrl+C to stop\n")
 
     forwarder = None
     if settings.forwarder.enabled and settings.forwarder.source_channel_ids:
         forwarder = SessionForwarder(settings)
         forwarder.start_background()
 
+    print("   Press Ctrl+C to stop\n")
     try:
-        asyncio.run(run_bot(settings, forwarder))
+        asyncio.run(_run_all(settings, forwarder))
     except KeyboardInterrupt:
         print("\nBot stopped.")
 
