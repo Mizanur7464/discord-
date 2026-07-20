@@ -96,6 +96,8 @@ def load_translator_env() -> dict:
         *_parse_channel_ids(os.getenv("NEWS_SOURCE_CHANNEL_IDS", "").strip()),
         *_parse_channel_ids(os.getenv("SUMMARY_CHANNEL_ID", "").strip()),
         *_parse_channel_ids(os.getenv("MOSQUITO_CHANNEL_ID", "").strip()),
+        *_parse_channel_ids(os.getenv("GOOD_NEWS_CHANNEL_ID", "").strip()),
+        *_parse_channel_ids(os.getenv("BAD_NEWS_CHANNEL_ID", "").strip()),
     }
     return {
         "token": token,
